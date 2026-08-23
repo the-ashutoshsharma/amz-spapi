@@ -27,7 +27,27 @@
         "command": "npx cdk synth --app \"node --loader ts-node/esm bin/app.ts\"",
         "cwd": "infra/aws"
       },
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build",
+        {
+          "projects": ["tag:scope:lambda"],
+          "target": "build"
+        }
+      ]
+    },
+    "deploy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx cdk deploy --app \"node --loader ts-node/esm bin/app.ts\"",
+        "cwd": "infra/aws"
+      },
+      "dependsOn": [
+        "^build",
+        {
+          "projects": ["tag:scope:lambda"],
+          "target": "build"
+        }
+      ]
     }
   }
 }

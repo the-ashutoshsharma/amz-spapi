@@ -7,6 +7,32 @@ Nothing here is registered by hand in the CDK stack. `LambdasStack` discovers
 every directory under `apps/lambdas/` that declares a `metadata.lambda` block and
 builds the function from that declaration, so adding a Lambda is adding an app.
 
+## Deploying
+
+Always through the Nx target, never `cdk deploy` directly:
+
+```bash
+npx nx run infra-aws:deploy -- sellavant-dev-lambdas -c stage=dev
+```
+
+**`cdk deploy` does not build anything.** It packages whatever is sitting in
+`dist/`, so running it directly ships the last bundle you happened to build —
+silently, with a successful-looking deploy and a function that still contains
+the bug you just fixed. That cost two debugging rounds against a stale worker
+before it was noticed.
+
+`^build` alone does not fix it either. `LambdasStack` discovers these apps from
+the filesystem rather than importing them, so Nx's graph has NO edge from
+`infra-aws` to any Lambda and `^build` resolves to npm packages. The `deploy`
+and `synth` targets therefore name them by tag:
+
+```jsonc
+"dependsOn": ["^build", { "projects": ["tag:scope:lambda"], "target": "build" }]
+```
+
+Which is why every app here carries `"tags": ["scope:lambda", …]`. Drop that tag
+and the app stops being built before a deploy — and nothing will tell you.
+
 ## The contract
 
 ```jsonc
