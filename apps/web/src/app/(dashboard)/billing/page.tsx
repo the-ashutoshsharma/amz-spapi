@@ -7,7 +7,9 @@ import {
   purchasablePlans,
 } from '@farvisionllc/models';
 import { Badge } from '@/components/ui/badge';
+import { redirect } from 'next/navigation';
 import { auth0 } from '../../../lib/auth0';
+import { signedOutRedirect } from '../../../lib/signed-out';
 import { currentWorkspace } from '../../../lib/workspace-context';
 import { spendTodayUsd } from '../../../lib/cost-ledger';
 import { BillingActions } from './billing-actions';
@@ -25,7 +27,9 @@ export const metadata: Metadata = { title: 'Billing' };
  */
 export default async function BillingPage() {
   const session = await auth0.getSession();
-  if (!session?.user?.sub) return null;
+  // Not a type narrow: the layout's gate does not re-run on a client-side
+  // navigation, so an expired session used to render this page blank.
+  if (!session?.user?.sub) redirect(signedOutRedirect('/billing'));
 
   const context = await currentWorkspace(session.user.sub);
   if (!context) return null;

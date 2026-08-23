@@ -24,6 +24,8 @@ import {
   Square,
 } from 'lucide-react';
 import { uploadImageAsset } from '@/lib/asset-upload-client';
+import { useSessionExpired } from '@/components/session-expiry';
+import { markSessionExpired, signInUrl } from '@/lib/session-expiry';
 import {
   SidebarInset,
   SidebarProvider,
@@ -228,6 +230,42 @@ function isFileDrag(event: React.DragEvent): boolean {
 
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
+/**
+ * Where a message that could not be sent waits out the round trip to Auth0.
+ *
+ * Signing back in is a full page load, so everything the composer was holding
+ * is gone by the time the seller returns — and what they lose is precisely the
+ * long, carefully written prompt that took the session past its expiry.
+ */
+const DRAFT_KEY = 'sellavant-chat-draft';
+
+/**
+ * The turn's own fetch, so an expired session reads as one.
+ *
+ * The AI SDK turns any non-OK response into `new Error(await response.text())`,
+ * which put the raw body — `{"error":"Unauthorized"}` — in the red bar under
+ * the composer as if it were an explanation. Throwing first replaces it with a
+ * sentence; the dialog is already on its way up because the watcher in the
+ * layout saw the same 401 pass through the wrapped global `fetch`.
+ *
+ * `markSessionExpired` is called here too rather than relied upon, so a turn
+ * still reports honestly if this page is ever mounted outside that layout.
+ */
+async function chatFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await fetch(input, init);
+  if (response.status === 401) {
+    markSessionExpired();
+    throw new Error(
+      'Your session expired before this could be sent. Sign in again — your ' +
+        'message is kept.'
+    );
+  }
+  return response;
+}
+
 /** The scrolling transcript, so Cmd/Ctrl+A can be aimed at it. */
 const TRANSCRIPT_ID = 'chat-transcript';
 
@@ -278,6 +316,7 @@ export default function ChatPage() {
     () =>
       new DefaultChatTransport({
         api: '/api/chat',
+        fetch: chatFetch,
         // The conversation id lives in a ref so the transport always sends the
         // CURRENT conversation without re-instantiating the chat hook.
         prepareSendMessagesRequest: ({ id, messages }) => ({
@@ -324,14 +363,6 @@ export default function ChatPage() {
       [setMessages]
     ),
     /**
-     * Start a turn so the model actually reads what landed.
-     *
-     * `sendMessage()` with no argument re-requests against the existing
-     * messages rather than appending a user turn, so the delivery reads as the
-     * conversation continuing itself — which is what the agent promised when it
-     * said it would fetch and present the results.
-     */
-    /**
      * Ask for the result, rather than continuing from the notification.
      *
      * `sendMessage()` with no argument re-requests against the existing
@@ -348,6 +379,21 @@ export default function ChatPage() {
       void sendMessage({ text: 'The report landed — give me the summary.' });
     }, [sendMessage]),
   });
+
+  /**
+   * True once anything has come back 401. The whole page is affected — the
+   * transcript will not save, an upload will not store — so the composer says
+   * so rather than letting the seller write into a dead session.
+   */
+  const sessionIsExpired = useSessionExpired();
+
+  /**
+   * What the seller typed for the turn currently in flight, kept because
+   * `sendMessage` has already cleared the composer by the time the request
+   * fails. Their words, not the assembled prompt: the attachment manifests
+   * appended to it are machine text and restoring them would be baffling.
+   */
+  const lastAttemptRef = useRef('');
 
   // The current messages, for callbacks that must not re-create themselves as
   // the conversation changes: the document-level select-all listener is
@@ -386,6 +432,25 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [setMessages]);
+
+  /**
+   * Hold on to the unsent message for the trip through Auth0 and back.
+   *
+   * Only on expiry, and cleared as soon as it is restored, so this cannot
+   * resurrect a stale draft over something typed later.
+   */
+  useEffect(() => {
+    if (!sessionIsExpired) return;
+    const draft = input.trim() || lastAttemptRef.current.trim();
+    if (draft) window.localStorage.setItem(DRAFT_KEY, draft);
+  }, [sessionIsExpired, input]);
+
+  useEffect(() => {
+    const draft = window.localStorage.getItem(DRAFT_KEY);
+    if (!draft) return;
+    window.localStorage.removeItem(DRAFT_KEY);
+    setInput((current) => current || draft);
+  }, []);
 
   /**
    * Everything the composer is holding, which belongs to the conversation it
@@ -788,6 +853,9 @@ export default function ChatPage() {
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
+    // Sending into an expired session buys a second 401 and costs the seller
+    // their message; the banner below already says what to do instead.
+    if (sessionIsExpired) return;
     const text = input.trim();
     if (
       (!text && pendingPhotos.length === 0 && pendingDocuments.length === 0) ||
@@ -811,6 +879,7 @@ export default function ChatPage() {
     ]
       .filter(Boolean)
       .join('\n\n');
+    lastAttemptRef.current = text;
     await sendMessage({ text: combined });
   };
 
@@ -990,14 +1059,33 @@ export default function ChatPage() {
           <ConversationScrollButton className="bottom-6 shadow-md" />
         </Conversation>
 
-        {/* Error banner */}
-        {error && (
+        {/* Error banner. An expired session wins over whatever error the
+            failed turn produced: every other message here is advice about a
+            request that could have worked, and this one could not. */}
+        {(sessionIsExpired || error) && (
           <div className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-4 py-3">
             <div className="mx-auto flex max-w-3xl xl:max-w-5xl 2xl:max-w-6xl items-start gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-              <p className="text-sm text-destructive">
-                {error.message || 'Something went wrong'}
-              </p>
+              {sessionIsExpired ? (
+                <p className="text-sm text-destructive">
+                  Your session has expired, so nothing here can be sent or
+                  saved.{' '}
+                  {/* Only ever rendered in the browser: the store's server
+                      snapshot is always "signed in", because a server render
+                      that reached this page had a session. */}
+                  <a
+                    className="font-medium underline"
+                    href={signInUrl(window.location)}
+                  >
+                    Sign in again
+                  </a>{' '}
+                  — this conversation and what you were typing are kept.
+                </p>
+              ) : (
+                <p className="text-sm text-destructive">
+                  {error?.message || 'Something went wrong'}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -1144,7 +1232,8 @@ export default function ChatPage() {
                     (!input.trim() &&
                       pendingPhotos.length === 0 &&
                       pendingDocuments.length === 0) ||
-                    uploadingCount > 0
+                    uploadingCount > 0 ||
+                    sessionIsExpired
                   }
                   size="icon"
                   className="h-11 w-11 shrink-0 rounded-full"

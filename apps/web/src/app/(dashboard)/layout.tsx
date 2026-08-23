@@ -6,6 +6,7 @@ import { resolveAccess } from '../../lib/access';
 import { listPendingInvitationsForEmail } from '@amz-spapi/identity';
 import { DashboardNav } from '@/components/dashboard-nav';
 import { PostHogProvider } from '@/components/posthog-provider';
+import { SessionExpiryWatcher } from '@/components/session-expiry';
 import { selectInvitationsToShow } from './team/pending-invitations';
 
 export default async function DashboardLayout({
@@ -105,6 +106,11 @@ export default async function DashboardLayout({
           </span>
         </header>
         <main className="flex-1">{children}</main>
+        {/* The gate above runs once per full load; client-side navigation
+            never runs it again. This is what notices when the cookie behind
+            it expires — until now the app simply collected 401s and carried
+            on looking signed in. */}
+        <SessionExpiryWatcher />
       </div>
     </PostHogProvider>
   );

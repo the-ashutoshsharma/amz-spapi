@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { auth0 } from '../../../lib/auth0';
+import { signedOutRedirect } from '../../../lib/signed-out';
 import { listAPlusDrafts } from '../../../lib/a-plus-drafts';
 import { DesignsList } from './designs-list';
 
@@ -9,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function APlusDesignsPage() {
   const session = await auth0.getSession();
   if (!session?.user?.sub) {
-    redirect('/login');
+    redirect(signedOutRedirect('/a-plus'));
   }
 
   const drafts = await listAPlusDrafts(session.user.sub);
