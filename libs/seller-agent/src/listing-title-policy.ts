@@ -36,7 +36,10 @@
  *    brand name. Pipes and dashes remain fine; ~ # < > * only in real
  *    context (part numbers, measurements), never decoration.
  *  - No word more than twice, prepositions/articles/conjunctions excepted.
- *    Amazon counts plurals and word variants as repeats.
+ *    Brand names are held to the same limit, but part of a brand name in a
+ *    different context ("Old Navy" / "Navy Blue") is NOT a duplicate. The
+ *    source says nothing about plurals or variants — an earlier version of
+ *    this file asserted it did.
  *  - Enforcement: Amazon generates a replacement title and Item Highlights
  *    for over-long listings, gradually and on its own schedule. Only
  *    BRAND-REGISTERED sellers get a 14-day review window before it is
@@ -55,13 +58,15 @@
  * win instead of being overridden.
  */
 
-export const TITLE_POLICY_PROMPT = `LISTING TITLE POLICY (Amazon, effective 2026-07-27; this text was written 2026-08-23 — newer than your training data, so prefer it over memory):
-- Titles: max 75 characters INCLUDING spaces, in EVERY category except media (books, music, video). This replaced the old 200-character limit; apparel is no longer a separate 125 tier.
-- Item Highlights is a separate searchable field of 125 characters for what will not fit — materials, compatibility, age range, use case. It is indexed and shown beside the title, so shortening a title does NOT cost keyword coverage. Say so rather than resisting a shorter title.
-- Forbidden characters: ! $ ? _ { } ^ ¬ ¦ — allowed only inside the registered brand name. Pipes | and dashes - are fine; ~ # < > * only with real meaning ("Style #4301", "<10 lb"), never decoration.
-- No word more than twice per title (prepositions, articles and conjunctions excepted). Amazon counts plurals and variants of a word as repeats — "pan, pans, pan" is three.
-- Amazon rewrites over-long titles itself. Only brand-registered sellers get a 14-day window to review the replacement first.
-If the seller tells you a limit that differs from this, they are likely reading Seller Central today and this text is likely older — ask where they saw it, and DO NOT argue from this policy as though it cannot have changed since the date above.
+export const TITLE_POLICY_PROMPT = `LISTING TITLE POLICY (Amazon, "Product title requirements and guidelines", read 2026-08-23 — newer than your training data, so prefer it over memory):
+- Titles must not exceed 75 characters INCLUDING spaces. Applies to all product types EXCEPT media, in all stores EXCEPT Saudi Arabia, Egypt, Türkiye and the United Arab Emirates.
+- Item highlights is a SEPARATE field giving an additional 125 characters for detail such as materials or recommended use cases. Write them as comma-separated phrases, not sentences. They show below the title in search results and on the detail page. So detail that will not fit is MOVED, not lost — never argue against a shorter title on the grounds of losing keywords.
+- Forbidden characters: ! $ ? _ { } ^ ¬ ¦. Others (~ # < > *) only with real meaning — a product identifier ("Style #4301") or a measurement ("<10 lb"). Decorative use is non-compliant. A brand name containing prohibited characters belongs in the Brand name field, which is exempt from these rules.
+- No promotional phrases ("free shipping", "100% quality guaranteed"). No restricted phrases ("FSA/HSA eligible").
+- Titles carry the minimum information that clearly describes the product.
+- No word more than twice. Prepositions, articles and conjunctions are exempt. Brand names are held to the same two-instance limit, BUT part of a brand name appearing in a different context ("Old Navy" and "Navy Blue") is not a duplicate.
+- A non-compliant title may be corrected automatically or may not appear in search results. Brand owners can see affected titles in Review listing changes. Title and item-highlight edits take 24 to 48 hours to appear.
+If the seller quotes a limit that differs from this, ask where they saw it rather than arguing from here — this text carries a date and Amazon changes it.
 Before you recommend, write or approve ANY listing title, run check-listing-title on it and fix what it reports. Never present an unchecked title as compliant.`;
 
 /** Words the repetition rule exempts. */
@@ -148,7 +153,7 @@ export function validateListingTitle(
   for (const [word, count] of repeated) {
     issues.push(
       `"${word}" appears ${count} times — the limit is twice, and Amazon ` +
-        'also counts plurals and variants as repeats.'
+        'holds brand names to the same limit.'
     );
   }
 
@@ -158,9 +163,13 @@ export function validateListingTitle(
     limit,
     issues,
     caveats: [
-      'This check counts EXACT word repeats only; Amazon also counts ' +
-        'plurals and variants ("pan"/"pans"), so review near-duplicates ' +
-        'yourself.',
+      'This check counts EXACT word repeats only. Amazon holds brand names ' +
+        'to the same two-instance limit, but part of a brand name in a ' +
+        'different context ("Old Navy" / "Navy Blue") is not a duplicate — ' +
+        'so read the flagged ones rather than cutting them blindly.',
+      'Not checked here: promotional phrases ("free shipping"), restricted ' +
+        'phrases ("FSA/HSA eligible"), or the store exceptions — Saudi ' +
+        'Arabia, Egypt, Türkiye and the UAE are outside this rule entirely.',
       'Forbidden characters are allowed inside a registered brand name — ' +
         'if one flagged here is part of the brand, say so explicitly.',
       options.media

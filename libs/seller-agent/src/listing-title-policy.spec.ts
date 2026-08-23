@@ -16,7 +16,9 @@ describe('validateListingTitle', () => {
     expect(check.issues).toEqual([]);
     // The caveats are part of the answer: what this check cannot see, the
     // model must say rather than silently certify.
-    expect(check.caveats.join(' ')).toMatch(/plurals and variants/);
+    // The source says nothing about plurals; it says brand names count to the
+    // same limit unless part of one appears in a different context.
+    expect(check.caveats.join(' ')).toMatch(/Old Navy/);
   });
 
   it('measures length including spaces, against the 75-character limit', () => {
