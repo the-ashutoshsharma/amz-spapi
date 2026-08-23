@@ -19,18 +19,44 @@ import { cn } from '@/lib/utils';
 
 type ImportResult = {
   kind: string;
+  /** The document route names the kind for us; the report route does not. */
+  label?: string;
   rowsParsed: number;
   rowsNew: number;
   rowsDuplicate: number;
+  /**
+   * Already-held rows re-read under the current column mapping — a subset of
+   * `rowsDuplicate`. Non-zero means an earlier import of this file captured
+   * less than the registry maps today, which is the only signal that
+   * re-importing an old export was worth doing.
+   */
+  rowsRefreshed?: number;
   unmappedHeaders?: string[];
   observedFrom?: string;
   observedTo?: string;
   detectionConfidence?: number;
+  /**
+   * What the seller must be told about a load that nonetheless succeeded: an
+   * overlap with days the ads sync already holds, or an overlap check that
+   * could not run at all.
+   *
+   * The importer raises these because a check that could not run is not the
+   * same as a check that passed — and this page used to drop them on the
+   * floor, which is exactly the silence they exist to remove.
+   */
+  warnings?: string[];
 };
 
 type ImportError = {
   error: string;
   candidates?: Array<{ kind: string; matched: number; possible: number }>;
+  /**
+   * Set when the refusal is an ads-sync overlap. The message tells the seller
+   * they may import it anyway if this is a different advertiser profile, so
+   * there has to be a way to do that — the route has always accepted
+   * `allowOverlap`, and nothing ever sent it.
+   */
+  overlap?: { kind: string; from: string; to: string; profileId: string };
 };
 
 type DocumentResult = {
@@ -40,6 +66,21 @@ type DocumentResult = {
   mimeType: string;
   sizeBytes: number;
   duplicate?: boolean;
+  /**
+   * Set when the file was recognised as an Amazon export and its rows were
+   * stored. A `.xlsx` export lands here rather than on the report route, so
+   * without this the page that exists to import reports said nothing whatever
+   * about the rows it had just imported.
+   */
+  report?: ImportResult;
+  /** The rows did NOT go in. The file is still stored; the numbers are not. */
+  reportError?: string;
+  /** Read as a document, but the figures could not be extracted from it. */
+  extractionError?: string;
+  /** Figures were read and then could not be filed for later reconciliation. */
+  documentStoreError?: string;
+  /** The sheet preview could not be built. The file is stored regardless. */
+  spreadsheetError?: string;
   recognition?: {
     kind: string;
     confidence: number;
@@ -86,6 +127,15 @@ type Row = {
   /** Looked like a report by extension but was not one; kept as a document. */
   notReport?: boolean;
   error?: ImportError;
+  /**
+   * The file itself, kept ONLY for a refusal the seller is allowed to
+   * override. Holding every upload would be expensive for the case this page
+   * is built for — a year of settlements is around 5 MB each — so it is
+   * attached to the one row that has a use for it.
+   */
+  retry?: File;
+  /** True while that override is in flight. */
+  retrying?: boolean;
 };
 
 /**
@@ -143,6 +193,31 @@ function classify(file: File): 'report' | 'document' {
 }
 
 /**
+ * One file, one request.
+ *
+ * `allowOverlap` is the seller's answer to a refusal, not a default: the ads
+ * sync and a console export spell their columns differently, so days held by
+ * both are stored twice rather than merged. The route has always accepted it.
+ */
+async function send(
+  endpoint: string,
+  file: File,
+  allowOverlap = false
+): Promise<{ response: Response; payload: unknown }> {
+  const body = new FormData();
+  body.append('file', file);
+  if (allowOverlap) body.append('allowOverlap', 'true');
+  const response = await fetch(endpoint, { method: 'POST', body });
+  // A crashed route answers with an HTML error page, and json() then throws
+  // "Unexpected end of JSON input" — which tells the user nothing. Fall back
+  // to the status.
+  const payload = await response.json().catch(() => ({
+    error: `Server error (HTTP ${response.status}). Check the server log.`,
+  }));
+  return { response, payload };
+}
+
+/**
  * Labels for the kinds detection can return. Kept in step with the registry in
  * `sp-cache` by hand: importing it here would pull the Couchbase client into a
  * client component.
@@ -165,6 +240,8 @@ export default function ReportsPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** See the drop zone's `onDragEnter` — counts descendants, not booleans. */
+  const dragDepthRef = useRef(0);
 
   const upload = useCallback(async (files: FileList | File[]) => {
     const uploadOne = async (file: File) => {
@@ -176,29 +253,17 @@ export default function ReportsPage() {
       ]);
 
       try {
-        const send = async (endpoint: string) => {
-          const body = new FormData();
-          body.append('file', file);
-          const response = await fetch(endpoint, { method: 'POST', body });
-          // A crashed route answers with an HTML error page, and json() then
-          // throws "Unexpected end of JSON input" — which tells the user
-          // nothing. Fall back to the status.
-          const payload = await response.json().catch(() => ({
-            error: `Server error (HTTP ${response.status}). Check the server log.`,
-          }));
-          return { response, payload };
-        };
-
         let asKind = kind;
         let { response, payload } = await send(
-          kind === 'report' ? '/api/reports/import' : '/api/documents/import'
+          kind === 'report' ? '/api/reports/import' : '/api/documents/import',
+          file
         );
 
         // A .csv or .txt that is not an Amazon export — a supplier price list,
         // say — should not be a dead end. Keep the file as a document rather
         // than telling the user their upload failed.
         if (!response.ok && kind === 'report' && response.status === 422) {
-          const retry = await send('/api/documents/import');
+          const retry = await send('/api/documents/import', file);
           if (retry.response.ok) {
             asKind = 'document';
             response = retry.response;
@@ -221,7 +286,15 @@ export default function ReportsPage() {
                           notReport: kind === 'report',
                         }),
                   }
-                : { ...row, status: 'failed', error: payload as ImportError }
+                : {
+                    ...row,
+                    status: 'failed',
+                    error: payload as ImportError,
+                    // Only an overridable refusal keeps the bytes around.
+                    ...((payload as ImportError).overlap
+                      ? { retry: file }
+                      : {}),
+                  }
               : row
           )
         );
@@ -246,6 +319,49 @@ export default function ReportsPage() {
     await runPooled(Array.from(files), UPLOAD_CONCURRENCY, uploadOne);
   }, []);
 
+  /**
+   * Load a file the overlap guard refused.
+   *
+   * The refusal ends with "or import it anyway if this is a different
+   * advertiser profile", which was advice about a button that did not exist:
+   * the only way through was to narrow the export's date range in Seller
+   * Central and download it again.
+   */
+  const importAnyway = useCallback(async (id: string, file: File) => {
+    setRows((current) =>
+      current.map((row) => (row.id === id ? { ...row, retrying: true } : row))
+    );
+
+    const { response, payload } = await send(
+      '/api/reports/import',
+      file,
+      true
+    ).catch(() => ({ response: undefined, payload: undefined }));
+
+    setRows((current) =>
+      current.map((row) => {
+        if (row.id !== id) return row;
+        if (response?.ok) {
+          return {
+            ...row,
+            status: 'done',
+            result: payload as ImportResult,
+            error: undefined,
+            retry: undefined,
+            retrying: false,
+          };
+        }
+        return {
+          ...row,
+          retrying: false,
+          error: (payload as ImportError) ?? {
+            error: 'Import failed. Check the server log.',
+          },
+        };
+      })
+    );
+  }, []);
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       <h1 className="text-2xl font-semibold tracking-tight">Import</h1>
@@ -257,21 +373,47 @@ export default function ReportsPage() {
         account.
       </p>
 
+      {/*
+        A button, not a div with an onClick. The file input below is
+        `display:none`, so it is not focusable either — between them a keyboard
+        user had no way at all to reach the only control on the page.
+      */}
       <div
-        onDragOver={(event) => {
+        role="button"
+        tabIndex={0}
+        aria-label="Choose report or document files to import"
+        onDragEnter={(event) => {
           event.preventDefault();
+          // Nested children each fire their own dragenter/leave, so a boolean
+          // flip flickers the highlight as the pointer crosses the text inside
+          // the zone. Depth tracks how many descendants currently contain the
+          // drag; the highlight drops only when it leaves the zone entirely.
+          dragDepthRef.current += 1;
           setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={() => {
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDragging(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
+          dragDepthRef.current = 0;
           setDragging(false);
           if (event.dataTransfer.files?.length)
             upload(event.dataTransfer.files);
         }}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          // Space scrolls the page otherwise, which is the opposite of opening
+          // the picker the key was pressed for.
+          event.preventDefault();
+          inputRef.current?.click();
+        }}
         className={cn(
           'mt-6 flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-10 text-center transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           dragging
             ? 'border-primary bg-primary/5'
             : 'border-muted-foreground/25 hover:border-muted-foreground/50'
@@ -343,14 +485,14 @@ export default function ReportsPage() {
               <span className="truncate text-sm font-medium">
                 {row.fileName}
               </span>
+              {/* An .xlsx that WAS imported as a ledger is not "Document" —
+                  the badge is the only thing on the card that names what the
+                  file turned out to be. */}
               <span className="ml-auto text-xs text-muted-foreground">
-                {row.result
-                  ? REPORT_LABELS[row.result.kind] ?? row.result.kind
-                  : row.document
-                  ? 'Document'
-                  : row.kind === 'report'
-                  ? 'Report'
-                  : 'Document'}
+                {reportLabel(row.result ?? row.document?.report) ??
+                  (row.document || row.kind === 'document'
+                    ? 'Document'
+                    : 'Report')}
               </span>
             </div>
 
@@ -378,30 +520,17 @@ export default function ReportsPage() {
               </dl>
             ) : null}
 
-            {row.result ? (
-              <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
-                <Stat label="New rows" value={row.result.rowsNew} />
-                <Stat
-                  label="Already held"
-                  value={row.result.rowsDuplicate}
-                  muted
-                />
-                <Stat label="Parsed" value={row.result.rowsParsed} muted />
-                <Stat
-                  label="Covers"
-                  value={
-                    row.result.observedFrom && row.result.observedTo
-                      ? `${row.result.observedFrom} → ${row.result.observedTo}`
-                      : '—'
-                  }
-                  muted
-                />
-              </dl>
+            {row.result ? <ReportOutcome result={row.result} /> : null}
+
+            {/* A .xlsx export is routed to the DOCUMENT importer, which files
+                its rows all the same. Without this the page whose job is
+                importing reports said nothing about the rows it had just
+                imported — the seller saw a stored file and no numbers. */}
+            {row.document?.report ? (
+              <ReportOutcome result={row.document.report} />
             ) : null}
 
-            {/* Unrecognised columns are kept verbatim, but say so: it is how a
-                mapping that has drifted becomes visible instead of silent. */}
-            {row.notReport ? (
+            {row.notReport && !row.document?.report ? (
               <p className="mt-3 text-xs text-muted-foreground">
                 Not a recognised Amazon report kind — stored whole. Chat can
                 answer questions over every row of it (attach it there, or ask
@@ -409,6 +538,23 @@ export default function ReportsPage() {
                 say which and it can be added.
               </p>
             ) : null}
+
+            {/* De-duplication is the same promise on both halves of this page,
+                and only the report half was keeping it: a re-uploaded PDF
+                reported a fresh store, so a folder dropped twice looked like
+                twice the documents. */}
+            {row.document?.duplicate ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Already held — the identical file is stored once, so this
+                changed nothing.
+              </p>
+            ) : null}
+
+            {/* What did not happen. Each of these is a step the route lets
+                fail on purpose so the upload survives it, and each was
+                arriving as silence: a green tick over a document whose figures
+                were never read. */}
+            {row.document ? <DocumentIssues stored={row.document} /> : null}
 
             {/* The shipped side: what this sheet says the seller sent. A
                 label PDF holds one label per box, so a shipment is summarised
@@ -482,16 +628,25 @@ export default function ReportsPage() {
               </div>
             ) : null}
 
-            {row.result?.unmappedHeaders?.length ? (
-              <p className="mt-3 text-xs text-amber-700">
-                Columns not recognised (stored, but not searchable):{' '}
-                {row.result.unmappedHeaders.join(', ')}
-              </p>
-            ) : null}
-
             {row.error ? (
               <div className="mt-2 text-sm text-amber-800">
                 <p>{row.error.error}</p>
+                {row.retry ? (
+                  <button
+                    type="button"
+                    disabled={row.retrying}
+                    onClick={() => {
+                      // Read here rather than narrowed through the closure:
+                      // `retry` is optional and TypeScript will not carry the
+                      // narrowing into a callback.
+                      const file = row.retry;
+                      if (file) void importAnyway(row.id, file);
+                    }}
+                    className="mt-2 rounded-md border border-amber-700/40 px-2.5 py-1 text-xs font-medium hover:bg-amber-700/10 disabled:opacity-60"
+                  >
+                    {row.retrying ? 'Importing…' : 'Import anyway'}
+                  </button>
+                ) : null}
                 {row.error.candidates?.length ? (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Closest matches:{' '}
@@ -516,6 +671,104 @@ export default function ReportsPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** The kind a report import settled on, named for the badge. */
+function reportLabel(result?: ImportResult): string | undefined {
+  if (!result) return undefined;
+  return result.label ?? REPORT_LABELS[result.kind] ?? result.kind;
+}
+
+/**
+ * What an import did, for either route that can do one.
+ *
+ * Shared because a `.csv` goes to the report route and a `.xlsx` to the
+ * document route, and the seller has no reason to care which — the numbers
+ * mean the same thing and were only being shown for one of them.
+ */
+function ReportOutcome({ result }: { result: ImportResult }) {
+  const unmapped = result.unmappedHeaders ?? [];
+  return (
+    <>
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+        <Stat label="New rows" value={result.rowsNew} />
+        <Stat label="Already held" value={result.rowsDuplicate} muted />
+        <Stat label="Parsed" value={result.rowsParsed} muted />
+        <Stat
+          label="Covers"
+          value={
+            result.observedFrom && result.observedTo
+              ? `${result.observedFrom} → ${result.observedTo}`
+              : '—'
+          }
+          muted
+        />
+      </dl>
+
+      {result.rowsRefreshed ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {result.rowsRefreshed} already-held{' '}
+          {result.rowsRefreshed === 1 ? 'row was' : 'rows were'} re-read under
+          the current column mapping — an earlier import of this file captured
+          less.
+        </p>
+      ) : null}
+
+      {/* A load that succeeded and still has something to say: days the ads
+          sync already holds, or a guard that could not run. */}
+      {result.warnings?.length ? (
+        <ul className="mt-2 space-y-1 text-xs text-amber-700">
+          {result.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/* Unrecognised columns are kept verbatim, and saying so is how a
+          mapping that has drifted becomes visible instead of silent — but a
+          stranded-inventory export has eighty of them, and printing the list
+          buried the four numbers above it under a wall of orange. Folded, so
+          the count is the headline and the names are one click away. */}
+      {unmapped.length ? (
+        <details className="mt-2 text-xs text-amber-700">
+          <summary className="cursor-pointer">
+            {unmapped.length} {unmapped.length === 1 ? 'column' : 'columns'} not
+            recognised — stored, but not searchable
+          </summary>
+          <p className="mt-1 break-words">{unmapped.join(', ')}</p>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The steps that failed without failing the upload.
+ *
+ * Each of these is deliberate on the server — the file is stored and
+ * classified whatever else goes wrong — and each was reaching the seller as
+ * nothing at all, under a green tick.
+ */
+function DocumentIssues({ stored }: { stored: DocumentResult }) {
+  const issues = [
+    stored.reportError && `Rows not imported: ${stored.reportError}`,
+    stored.extractionError &&
+      `Figures not read from it: ${stored.extractionError}`,
+    stored.documentStoreError &&
+      `Read, but not filed for reconciliation: ${stored.documentStoreError}`,
+    stored.spreadsheetError &&
+      `Preview unavailable: ${stored.spreadsheetError}`,
+  ].filter((issue): issue is string => Boolean(issue));
+
+  if (!issues.length) return null;
+
+  return (
+    <ul className="mt-2 space-y-1 text-xs text-amber-700">
+      {issues.map((issue) => (
+        <li key={issue}>{issue}</li>
+      ))}
+    </ul>
   );
 }
 
