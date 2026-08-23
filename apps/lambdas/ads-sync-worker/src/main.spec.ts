@@ -77,11 +77,18 @@ const PROFILE = {
   user_id: 'auth0|1',
   advertiser_profile_id: '967757046531288',
   seller_id: 'A2HXBWIE3KMLKV',
+  profile_name: 'ads-ATVPDKIKX0DER-msdh79ns-967757046531288',
+  client_id: 'amzn1.application-oa2-client.test',
+  marketplace_id: 'ATVPDKIKX0DER',
+  region: 'NA',
 };
 
 const ITEM = {
   userId: 'auth0|1',
   profileId: '967757046531288',
+  profileName: 'ads-ATVPDKIKX0DER-msdh79ns-967757046531288',
+  clientId: 'amzn1.application-oa2-client.test',
+  marketplaceId: 'ATVPDKIKX0DER',
   sellerId: 'A2HXBWIE3KMLKV',
   kind: 'search-term' as const,
   from: '2026-07-09',
@@ -128,17 +135,62 @@ describe('plan', () => {
     ]);
   });
 
-  it('skips a profile with no seller id, and says so', async () => {
-    // Its rows would have nowhere to go: `collectAdsReport` files them under the
-    // seller, because the manual upload path does too.
-    executeQuery.mockResolvedValue({
-      rows: [{ ...PROFILE, seller_id: undefined }],
-    });
+  it('falls back to the account seller when the ads profile has none', async () => {
+    // No live ads profile carries a seller_id, so requiring one skipped every
+    // profile and planned nothing on every run since this shipped. The
+    // account's SP-API seller is also the id the on-demand path files under,
+    // so any other choice would store the same rows under two sellers.
+    executeQuery
+      .mockResolvedValueOnce({ rows: [{ ...PROFILE, seller_id: undefined }] })
+      .mockResolvedValueOnce({
+        rows: [{ user_id: 'auth0|1', seller_id: 'A2HXBWIE3KMLKV' }],
+      });
+
+    const result = (await handler({ step: 'plan' })) as {
+      items: Array<{ sellerId: string }>;
+    };
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items.every((i) => i.sellerId === 'A2HXBWIE3KMLKV')).toBe(
+      true
+    );
+  });
+
+  it('skips only when the user has no SP-API connection either', async () => {
+    executeQuery
+      .mockResolvedValueOnce({ rows: [{ ...PROFILE, seller_id: undefined }] })
+      .mockResolvedValueOnce({ rows: [] });
 
     const result = (await handler({ step: 'plan' })) as { items: unknown[] };
 
     expect(result.items).toEqual([]);
-    expect(JSON.stringify(logged)).toContain('no seller id');
+    expect(JSON.stringify(logged)).toContain('no SP-API connection');
+  });
+
+  it('refuses to plan a profile with no LWA client id', async () => {
+    // The Ads API sends it as a header on every request; without it the work
+    // would be planned and then fail an hour later with a bare 400.
+    executeQuery
+      .mockResolvedValueOnce({ rows: [{ ...PROFILE, client_id: undefined }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = (await handler({ step: 'plan' })) as { items: unknown[] };
+
+    expect(result.items).toEqual([]);
+    expect(JSON.stringify(logged)).toContain('no client id');
+  });
+
+  it('carries the credential name and marketplace, not the profile id', async () => {
+    const result = (await handler({ step: 'plan' })) as {
+      items: Array<{ profileName: string; marketplaceId: string }>;
+    };
+
+    // Credentials are keyed on the profile NAME; and this account holds CA, MX
+    // and BR profiles that were all being told they were US.
+    expect(result.items[0].profileName).toBe(
+      'ads-ATVPDKIKX0DER-msdh79ns-967757046531288'
+    );
+    expect(result.items[0].marketplaceId).toBe('ATVPDKIKX0DER');
   });
 
   it('publishes the denominator, so zero items is legible', async () => {
@@ -318,13 +370,13 @@ describe('reconcile', () => {
     expect(first.profileId).toBe('967757046531288');
   });
 
-  it('skips a profile with no seller rather than reading another account', async () => {
-    // The funnel belongs to a user, the rows to a seller. A profile with no
-    // seller has no rows of its own, and substituting any other seller's would
-    // decide one account's negatives from another's numbers.
-    executeQuery.mockResolvedValue({
-      rows: [{ ...PROFILE, seller_id: undefined }],
-    });
+  it('skips a profile whose user has no seller anywhere', async () => {
+    // The funnel belongs to a user, the rows to a seller. With neither an ads
+    // seller nor an SP-API connection there are no rows to read, and inventing
+    // one would decide this account's negatives from another's numbers.
+    executeQuery
+      .mockResolvedValueOnce({ rows: [{ ...PROFILE, seller_id: undefined }] })
+      .mockResolvedValueOnce({ rows: [] });
 
     await handler({ step: 'reconcile' } as never);
 
