@@ -29,7 +29,8 @@ export type ReportKind =
       readily as FBA ones. */
   | 'search-term'
   /** The ads console's campaign/ad-group performance export. */
-  | 'campaign-performance';
+  | 'campaign-performance'
+  | 'campaign-performance-summary';
 
 /** Logical fields we can join and reconcile on. */
 export type ReportFieldName =
@@ -477,21 +478,60 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       status: ['alertstatus', 'status'],
     },
   },
+  /**
+   * ONE ROW PER CAMPAIGN PER DAY, from the Reporting API.
+   *
+   * Deliberately does not accept the console export's `Date range` header. The
+   * two are the same facts at different GRAIN — daily rows here, one total per
+   * campaign over a window in `campaign-performance-summary` — and a single
+   * kind holding both means `total-report-rows` sums an aggregate alongside
+   * the days it aggregates. The row's raw date stopped them being mixed as
+   * DAYS; it did nothing to stop them being summed as SPEND.
+   */
   'campaign-performance': {
     kind: 'campaign-performance',
     reportType: 'SP_CAMPAIGN_PERFORMANCE_REPORT',
-    label: 'Sponsored Products campaign performance',
+    label: 'Sponsored Products campaign performance (daily)',
     fields: {
-      // "Date range" holds a SPAN ("Jul 13, 2026 - Aug 01, 2026"). It stays
-      // raw in the row, deliberately: each row is a total over those days, and
-      // pinning it to one of them would let it be summed alongside daily rows
-      // as though it were one. The WINDOW is still knowable — `readDateSpan`
-      // reads it for the coverage record and the upload overlap guard.
-      date: ['daterange', 'startdate', 'date'],
+      date: ['startdate', 'date'],
       portfolioName: ['portfolioname'],
       campaignName: ['campaignname'],
       adGroupName: ['adgroupname'],
-      // Present only on API-fetched rows; a console export has no id column.
+      campaignId: ['campaignid'],
+      adGroupId: ['adgroupid'],
+      currency: ['budgetcurrency', 'currency'],
+      clicks: ['clicks'],
+      spend: ['spend', 'cost'],
+      sales: ['sales', '14daytotalsales', '7daytotalsales'],
+      units: ['unitssold', 'units'],
+    },
+  },
+
+  /**
+   * ONE ROW PER CAMPAIGN over a window, from a Seller Central console export.
+   *
+   * `date` holds the SPAN verbatim ("Jul 13, 2026 - Aug 01, 2026") because
+   * that is what the row is a total of; pinning it to a day would invite
+   * exactly the mixing this kind exists to prevent. `readDateSpan` still reads
+   * the window for coverage and the upload overlap guard.
+   *
+   * `reportType` is a sentinel, not an Amazon enum: this report cannot be
+   * requested, only exported by hand. It must still be unique, because
+   * `reportByType` resolves a definition by that string.
+   */
+  'campaign-performance-summary': {
+    kind: 'campaign-performance-summary',
+    reportType: 'CONSOLE_SP_CAMPAIGN_EXPORT',
+    label: 'Sponsored Products campaign performance (console export)',
+    fields: {
+      date: ['daterange'],
+      portfolioName: ['portfolioname'],
+      campaignName: ['campaignname'],
+      adGroupName: ['adgroupname'],
+      // The console export DOES carry these — an older comment on the daily
+      // kind claimed it did not, and detection quietly depended on that being
+      // true. Claiming them here makes `Date range` the one header that
+      // separates the two, which is the only honest difference between them.
       campaignId: ['campaignid'],
       adGroupId: ['adgroupid'],
       currency: ['budgetcurrency', 'currency'],

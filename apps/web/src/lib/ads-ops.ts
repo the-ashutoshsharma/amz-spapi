@@ -1,5 +1,6 @@
 import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
 import type { SellerAdsOps } from '@amz-spapi/seller-agent';
+import { startReportJob } from './report-jobs-client';
 import { adsClientFor } from './amazon-clients';
 import {
   listAmazonConnections,
@@ -22,7 +23,22 @@ import {
  * definitions and the reversibility guarantee (ENABLED/PAUSED only, no
  * archive) lives in the ad-client, so there is no policy here to bypass.
  */
-export function createAdsOps(params: { userId: string }): SellerAdsOps {
+export function createAdsOps(params: {
+  userId: string;
+  /** Where a background report should be delivered. */
+  chatId?: string;
+  /**
+   * The seller account this chat is working in, from the SP-API connection.
+   *
+   * Ads profiles usually carry no `seller_id` of their own — none of the live
+   * ones do — and an ads report does not need one to run: the Amazon call is
+   * scoped by `profileId`, and nothing is filed under a seller afterwards. It
+   * is carried only so the credential service can meter the mint against the
+   * account, which is why the ads profile's own value is preferred when it
+   * happens to exist and this is the fallback.
+   */
+  sellerId?: string;
+}): SellerAdsOps {
   /**
    * Ads connections for this user, one per advertiser profile.
    *
@@ -56,7 +72,17 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
    * the whole account — an answer that looks complete and is not, which is worse
    * than a question.
    */
-  async function resolve(profileId?: string): Promise<AmazonAdsApiClient> {
+  /**
+   * The connection a call should use, rather than a client built from it.
+   *
+   * Split out because a background report job needs the profile id and seller
+   * id it resolved to — a client alone cannot be asked which profile it is,
+   * and re-deriving them would let the job run against a different profile
+   * than the one the user was answered about.
+   */
+  async function resolveConnection(
+    profileId?: string
+  ): Promise<AmazonConnection> {
     const available = await connections();
     if (available.length === 0) {
       throw new Error(
@@ -75,7 +101,7 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
             'to see the available ones.'
         );
       }
-      return clientFor(match);
+      return match;
     }
 
     if (available.length > 1) {
@@ -92,7 +118,11 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
       );
     }
 
-    return clientFor(available[0]);
+    return available[0];
+  }
+
+  async function resolve(profileId?: string): Promise<AmazonAdsApiClient> {
+    return clientFor(await resolveConnection(profileId));
   }
 
   return {
@@ -159,6 +189,69 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
         endDate,
         attribution,
       });
+    },
+
+    /**
+     * Queue the report so the wait happens off the turn.
+     *
+     * Resolves the profile FIRST, so a job is only created once we know which
+     * advertiser account it belongs to — a queued job that later cannot resolve
+     * a profile would fail in a Lambda, minutes after the user was told it was
+     * running.
+     */
+    async startPerformanceReportJob({
+      profileId,
+      level,
+      startDate,
+      endDate,
+      attribution,
+    }) {
+      if (!params.chatId) {
+        return { started: false, error: 'No conversation to deliver into.' };
+      }
+      const connection = await resolveConnection(profileId);
+      const sellerId = connection.profile.seller_id ?? params.sellerId;
+      if (!sellerId) {
+        return {
+          started: false,
+          error:
+            'No Amazon seller account is connected, so the report cannot be ' +
+            'metered against one.',
+        };
+      }
+
+      const result = await startReportJob({
+        userId: params.userId,
+        chatId: params.chatId,
+        sellerId,
+        kind: 'ads-performance',
+        request: {
+          profileId: connection.profile.advertiser_profile_id,
+          /**
+           * The stored credential's name, which is NOT the advertiser profile
+           * id. Credentials are keyed `${apiType}::${userId}::${profileName}`
+           * (`credentialDocKey`), so a worker handed the profile id looks up a
+           * document that does not exist and fails at token mint.
+           */
+          profileName: connection.profile.profile_name,
+          /**
+           * The Ads API sends the LWA app id as `Amazon-Advertising-API-ClientId`
+           * on EVERY request, so unlike SP-API it is not merely a token-exchange
+           * input. A worker without it gets a 400 from Amazon on a request that
+           * is otherwise perfectly formed.
+           */
+          clientId: connection.profile.client_id,
+          region: connection.profile.region,
+          marketplaceId: connection.profile.marketplace_id,
+          level,
+          startDate,
+          endDate,
+          attribution,
+        },
+      });
+      return result.started
+        ? { started: true, jobId: result.job.jobId }
+        : { started: false, error: result.error };
     },
 
     async fetchPerformanceReport({ profileId, reportId }) {

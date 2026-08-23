@@ -68,7 +68,7 @@ export const SOURCES: Source[] = [
     domain: 'reports',
     collection: c,
   })),
-  ...['cost_ledger', 'spend_counters'].map((c) => ({
+  ...['cost_ledger', 'spend_counters', 'report_jobs'].map((c) => ({
     domain: 'ops',
     collection: c,
   })),
@@ -152,6 +152,15 @@ export const INDEXES: IndexSpec[] = [
     collection: 'ops_cost_ledger',
     name: 'idx_cost_ledger_user_day',
     keys: ['`userId`', '`day`'],
+  },
+  // The chat asks "what is still owed to this conversation?" on every page load
+  // and on every SSE reconnect, so this sits on the path the user waits behind.
+  // Without it the lookup degrades to a scan as jobs accumulate — and it would
+  // not fail, only slow, which is the kind of regression nobody attributes.
+  {
+    collection: 'ops_report_jobs',
+    name: 'idx_report_jobs_chat',
+    keys: ['`userId`', '`chatId`', '`createdAt`'],
   },
   // The Stripe webhook's fallback lookup. A subscription created in the Stripe
   // dashboard carries none of our metadata, so `workspaceId` has to be

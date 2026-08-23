@@ -37,6 +37,8 @@ import {
 import { Loader } from '@/components/ai-elements/loader';
 import { ConversationSidebar } from './conversation-sidebar';
 import { MessageBubble, type AppMessage } from './message-bubble';
+import { useReportJobs } from './use-report-jobs';
+import { mergeDelivered } from './report-job-delivery';
 
 type PendingPhoto = {
   label: string;
@@ -302,6 +304,50 @@ export default function ChatPage() {
   });
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  /**
+   * Reports that finish after the turn that asked for them.
+   *
+   * Amazon takes minutes; a turn cannot wait that long. This drops the answer
+   * into the conversation when it lands, so nobody has to come back and ask
+   * whether it is done.
+   */
+  useReportJobs({
+    chatId: activeChatId,
+    isStreaming,
+    appendMessages: useCallback(
+      (incoming: AppMessage[]) => {
+        // Ids are derived from the job, so a delivery that arrives twice —
+        // two tabs, a reconnect — adds nothing.
+        setMessages((current) => mergeDelivered(current, incoming));
+      },
+      [setMessages]
+    ),
+    /**
+     * Start a turn so the model actually reads what landed.
+     *
+     * `sendMessage()` with no argument re-requests against the existing
+     * messages rather than appending a user turn, so the delivery reads as the
+     * conversation continuing itself — which is what the agent promised when it
+     * said it would fetch and present the results.
+     */
+    /**
+     * Ask for the result, rather than continuing from the notification.
+     *
+     * `sendMessage()` with no argument re-requests against the existing
+     * messages — which now END with the delivery, an assistant message. The
+     * provider refuses that outright: "This model does not support assistant
+     * message prefill. The conversation must end with a user message." So the
+     * continuation has to BE a user message.
+     *
+     * The cost is a turn the user did not type. It is phrased as the standing
+     * request it stands in for, and it is what makes the agent's promise to
+     * "give you a summary as soon as it lands" true.
+     */
+    onDelivered: useCallback(() => {
+      void sendMessage({ text: 'The report landed — give me the summary.' });
+    }, [sendMessage]),
+  });
 
   // The current messages, for callbacks that must not re-create themselves as
   // the conversation changes: the document-level select-all listener is

@@ -234,7 +234,8 @@ describe('ads upload overlap', () => {
 
     expect(isIngestError(result)).toBe(false);
     if (isIngestError(result)) return;
-    expect(result.kind).toBe('campaign-performance');
+    // A console export is its own kind now — same campaigns, different grain.
+    expect(result.kind).toBe('campaign-performance-summary');
     expect(result.warnings?.join(' ')).toMatch(
       /window this file covers is unknown/
     );

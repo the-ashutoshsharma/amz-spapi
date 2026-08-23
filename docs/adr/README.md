@@ -28,5 +28,6 @@ in the repository?
 | [0010](0010-lambdas-reach-couchbase-over-the-data-api.md)        | Lambdas reach Couchbase over the Data API, with the login fetched at runtime           | Accepted   |
 | [0011](0011-the-product-is-canonical.md)                         | The product is canonical; sync seeds it and never overwrites it                        | Accepted   |
 | [0012](0012-queues-pace-accounts-state-machines-wait.md)         | SQS FIFO paces accounts; Step Functions waits                                          | Accepted   |
+| [0013](0013-the-chat-does-not-wait-for-amazon.md)                | The chat does not wait for Amazon; a job outlives the turn                             | Accepted   |
 
 Related epic: [#51 — AWS integration](https://github.com/bwarner/amz-spapi/issues/51)

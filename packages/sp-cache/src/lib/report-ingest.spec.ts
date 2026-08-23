@@ -272,12 +272,15 @@ describe('detectReportKind', () => {
       '1.22800,,';
 
     const detected = detectReportKind(`${header}\n${row}`);
-    expect(detected.kind).toBe('campaign-performance');
-    expect(detected.decisive).toBe('campaign-performance');
+    // The CONSOLE kind, not the daily one. Its "Date range" header is one row
+    // covering many days, and filing it beside per-day rows let a total over a
+    // window be summed with the days it already totals.
+    expect(detected.kind).toBe('campaign-performance-summary');
+    expect(detected.decisive).toBe('campaign-performance-summary');
 
     const parsed = parseReport({
       text: `${header}\n${row}`,
-      kind: 'campaign-performance',
+      kind: 'campaign-performance-summary',
       sellerId: 'A1SELLER',
     });
     const [first] = parsed.rows;
