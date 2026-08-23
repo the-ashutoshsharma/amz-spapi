@@ -1,31 +1,52 @@
 /**
- * Amazon's product title requirements, effective 2025-01-21.
+ * Amazon's product title requirements, effective 2026-07-27.
  *
  * Source: Seller Central help page GYTR6SYGFA5E3EQC ("Product title
- * requirements") and Amazon's January 2025 announcement. This is POLICY the
- * model must not be trusted to remember: the rules postdate most training
- * data, and a confidently recommended 250-character keyword-stuffed title is
- * exactly the suggestion that gets a seller's ASIN suppressed. The prompt
- * carries the rules; the `check-listing-title` tool enforces them, because a
- * model that knows a rule and a model that checked are different models.
+ * requirements"), announced via Seller Central News on 2026-06-10. This is
+ * POLICY the model must not be trusted to remember: the rules postdate most
+ * training data, and a confidently recommended 200-character title is now
+ * exactly the suggestion that gets a seller's listing rewritten by Amazon.
+ * The prompt carries the rules; the `check-listing-title` tool enforces them,
+ * because a model that knows a rule and a model that checked are different
+ * models.
  *
- * The rules, as announced:
- *  - Max 200 characters including spaces in most categories (apparel
- *    categories are stricter, 125).
+ * The rules:
+ *  - Max 75 characters including spaces, in every category EXCEPT media
+ *    (books, music, video — drawn narrowly). This replaced the previous
+ *    200-character general limit and the 125-character apparel limit; apparel
+ *    is no longer a special case.
+ *  - `Item Highlights` is a separate, searchable 125-character field carrying
+ *    what no longer fits — materials, compatibility, age range, use case. It
+ *    is indexed and shown beside the title, so the total indexable space is
+ *    unchanged at roughly 200. Shortening a title is therefore not a loss of
+ *    keyword coverage, which is the argument for doing it properly rather
+ *    than truncating.
  *  - The characters ! $ ? _ { } ^ ¬ ¦ are not allowed unless part of the
  *    brand name. Pipes and dashes remain fine; ~ # < > * only in real
  *    context (part numbers, measurements), never decoration.
  *  - No word more than twice, prepositions/articles/conjunctions excepted.
  *    Amazon counts plurals and word variants as repeats.
- *  - Enforcement: non-compliant titles are flagged in Manage All Inventory
- *    with a 14-day window before Amazon edits or suppresses.
+ *  - Enforcement: Amazon generates a replacement title and Item Highlights
+ *    for over-long listings. Only BRAND-REGISTERED sellers get a 14-day
+ *    review window before it is applied; everyone else is simply rewritten.
+ *
+ * ## Why the effective date is in the prompt
+ *
+ * The previous version of this file told the model to "trust THIS, not
+ * memory" with no date the model could weigh, and the policy underneath it
+ * went stale for a month. A seller who said "titles must be 75 characters"
+ * was argued with, using a tool that read the same stale constant. Stating
+ * the date the assertion was written is what lets a seller's newer knowledge
+ * win instead of being overridden.
  */
 
-export const TITLE_POLICY_PROMPT = `LISTING TITLE POLICY (Amazon, effective 2025-01-21 — newer than your training data; trust THIS, not memory):
-- Titles: max 200 characters INCLUDING spaces in most categories; apparel is 125.
+export const TITLE_POLICY_PROMPT = `LISTING TITLE POLICY (Amazon, effective 2026-07-27; this text was written 2026-08-23 — newer than your training data, so prefer it over memory):
+- Titles: max 75 characters INCLUDING spaces, in EVERY category except media (books, music, video). This replaced the old 200-character limit; apparel is no longer a separate 125 tier.
+- Item Highlights is a separate searchable field of 125 characters for what will not fit — materials, compatibility, age range, use case. It is indexed and shown beside the title, so shortening a title does NOT cost keyword coverage. Say so rather than resisting a shorter title.
 - Forbidden characters: ! $ ? _ { } ^ ¬ ¦ — allowed only inside the registered brand name. Pipes | and dashes - are fine; ~ # < > * only with real meaning ("Style #4301", "<10 lb"), never decoration.
 - No word more than twice per title (prepositions, articles and conjunctions excepted). Amazon counts plurals and variants of a word as repeats — "pan, pans, pan" is three.
-- Non-compliant titles get flagged in Manage All Inventory with 14 days to fix before Amazon edits or suppresses the listing.
+- Amazon rewrites over-long titles itself. Only brand-registered sellers get a 14-day window to review the replacement first.
+If the seller tells you a limit that differs from this, they are likely reading Seller Central today and this text is likely older — ask where they saw it, and DO NOT argue from this policy as though it cannot have changed since the date above.
 Before you recommend, write or approve ANY listing title, run check-listing-title on it and fix what it reports. Never present an unchecked title as compliant.`;
 
 /** Words the repetition rule exempts. */
@@ -74,10 +95,16 @@ export type TitleCheck = {
 
 export function validateListingTitle(
   title: string,
-  options: { apparel?: boolean } = {}
+  options: { media?: boolean } = {}
 ): TitleCheck {
   const issues: string[] = [];
-  const limit = options.apparel ? 125 : 200;
+  /**
+   * Media keeps the old 200 because the 2026 rule excepts it; everything else
+   * is 75. `apparel` used to be the axis and is gone rather than deprecated —
+   * apparel is now 75 like every other non-media category, so an option that
+   * still answered 125 would be wrong in a way that reads as deliberate.
+   */
+  const limit = options.media ? 200 : 75;
   const characters = title.length;
 
   if (characters > limit) {
@@ -121,10 +148,14 @@ export function validateListingTitle(
         'yourself.',
       'Forbidden characters are allowed inside a registered brand name — ' +
         'if one flagged here is part of the brand, say so explicitly.',
-      options.apparel
-        ? undefined
-        : 'Checked against the 200-character general limit; apparel ' +
-          'categories are limited to 125.',
+      options.media
+        ? 'Checked against the 200-character MEDIA limit. Every other ' +
+          'category is 75 — if this is not books, music or video, re-check ' +
+          'without the media flag.'
+        : 'Checked against the 75-character limit that applies to every ' +
+          'category except media (books, music, video). What will not fit ' +
+          'belongs in Item Highlights, a separate searchable 125-character ' +
+          'field — so this is not a reason to drop keywords.',
     ].filter((caveat): caveat is string => Boolean(caveat)),
   };
 }

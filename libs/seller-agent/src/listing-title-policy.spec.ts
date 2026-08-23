@@ -10,8 +10,7 @@ import { validateListingTitle } from './listing-title-policy';
 describe('validateListingTitle', () => {
   it('passes a compliant title and still states its caveats', () => {
     const check = validateListingTitle(
-      'Gran Del Val Panama Geisha Coffee Whole Beans - Washed Process, ' +
-        'Notes of Jasmine and Citrus, 250g Bag'
+      'Gran Del Val Panama Geisha Whole Bean Coffee, Washed, 250g'
     );
     expect(check.compliant).toBe(true);
     expect(check.issues).toEqual([]);
@@ -20,20 +19,33 @@ describe('validateListingTitle', () => {
     expect(check.caveats.join(' ')).toMatch(/plurals and variants/);
   });
 
-  it('measures length including spaces, against the right limit', () => {
+  it('measures length including spaces, against the 75-character limit', () => {
     const long = 'word '.repeat(50).trim(); // 249 characters
     const check = validateListingTitle(long);
     expect(check.compliant).toBe(false);
     expect(check.characters).toBe(249);
-    expect(check.issues[0]).toMatch(/over the 200-character limit.*49/);
+    expect(check.issues[0]).toMatch(/over the 75-character limit.*174/);
   });
 
-  it('applies the stricter apparel limit when told', () => {
+  it('keeps the old 200 for media, which the 2026 rule excepts', () => {
     const title = 'x'.repeat(150);
-    expect(validateListingTitle(title).compliant).toBe(true);
-    const apparel = validateListingTitle(title, { apparel: true });
-    expect(apparel.compliant).toBe(false);
-    expect(apparel.limit).toBe(125);
+    // 150 is over the general limit and under the media one, so the flag is
+    // the whole difference between a compliant title and a rewritten listing.
+    expect(validateListingTitle(title).compliant).toBe(false);
+    expect(validateListingTitle(title).limit).toBe(75);
+
+    const media = validateListingTitle(title, { media: true });
+    expect(media.compliant).toBe(true);
+    expect(media.limit).toBe(200);
+  });
+
+  it('points a non-media title at Item Highlights rather than at cutting keywords', () => {
+    // The old policy's 200 characters did not go away, they moved. A model
+    // that does not know this argues against shortening, which is what
+    // happened to a seller who was reading the current rule correctly.
+    const check = validateListingTitle('x'.repeat(120));
+    expect(check.caveats.join(' ')).toMatch(/Item Highlights/);
+    expect(check.caveats.join(' ')).toMatch(/not a reason to drop keywords/);
   });
 
   it('names each forbidden character it finds', () => {
