@@ -81,6 +81,21 @@ export type PlanStep = { step: 'plan'; now?: string };
 export type WorkItem = {
   userId: string;
   profileId: string;
+  /**
+   * The stored credential's name. Credentials are keyed
+   * `${apiType}::${userId}::${profileName}`, so a worker handed the advertiser
+   * profile id looks up a document that does not exist and fails at mint.
+   */
+  profileName: string;
+  /**
+   * The real LWA app id. The Ads API sends it as
+   * `Amazon-Advertising-API-ClientId` on EVERY request — unlike SP-API, where
+   * it only feeds a token exchange the credential service performs instead — so
+   * a placeholder is rejected with a bare 400.
+   */
+  clientId: string;
+  marketplaceId: string;
+  region?: string;
   /** Whose rows these are in the report store — see `collectAdsReport`. */
   sellerId: string;
   kind: ReportKind;
@@ -104,6 +119,12 @@ type ProfileRow = {
   user_id: string;
   advertiser_profile_id: string;
   seller_id?: string;
+  /** The credential document's name — NOT the advertiser profile id. */
+  profile_name: string;
+  /** The LWA app id, sent as a header on every Ads request. */
+  client_id?: string;
+  marketplace_id?: string;
+  region?: string;
 };
 
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
@@ -120,7 +141,8 @@ const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 async function eligibleProfiles(): Promise<ProfileRow[]> {
   const { rows } = await executeQuery<ProfileRow>(
     'credentials',
-    `SELECT DISTINCT user_id, advertiser_profile_id, seller_id
+    `SELECT DISTINCT user_id, advertiser_profile_id, seller_id,
+            profile_name, client_id, marketplace_id, region
        FROM credentials_profiles
       WHERE api_type = 'ADS_API'
         AND advertiser_profile_id IS NOT MISSING
@@ -130,6 +152,60 @@ async function eligibleProfiles(): Promise<ProfileRow[]> {
     { readonly: true }
   );
   return rows;
+}
+
+/**
+ * The seller each user's rows belong to, from their SP-API connection.
+ *
+ * Ads profiles carry no `seller_id` of their own — none of the live ones do —
+ * and this worker skipped every profile that lacked one, so it planned zero
+ * items on every run since it shipped and has never ingested anything.
+ *
+ * The account's seller is the right answer and not merely an available one: the
+ * on-demand path files ads rows under exactly this id, so any other choice
+ * would store the same rows twice under two sellers.
+ */
+async function sellerByUser(): Promise<Map<string, string>> {
+  const { rows } = await executeQuery<{ user_id: string; seller_id: string }>(
+    'credentials',
+    `SELECT DISTINCT user_id, seller_id
+       FROM credentials_profiles
+      WHERE api_type = 'SP_API'
+        AND seller_id IS NOT MISSING
+        AND \`deleted\` IS MISSING`,
+    { readonly: true }
+  );
+  return new Map(rows.map((row) => [row.user_id, row.seller_id]));
+}
+
+/**
+ * Every usable ads profile, each with the seller its rows belong to.
+ *
+ * Both `plan` and `reconcile` need this and both previously skipped a profile
+ * that carried no `seller_id` of its own — which is all of them — so both did
+ * nothing on every run. Resolved once, here, so the two cannot disagree about
+ * whose rows a profile owns.
+ */
+async function profilesWithSeller(): Promise<
+  Array<ProfileRow & { sellerId: string }>
+> {
+  const [profiles, sellers] = await Promise.all([
+    eligibleProfiles(),
+    sellerByUser(),
+  ]);
+  return profiles.flatMap((profile) => {
+    const sellerId = profile.seller_id ?? sellers.get(profile.user_id);
+    if (!sellerId) {
+      // Now genuinely exceptional: no ads seller AND no SP-API connection, so
+      // there is no account to file rows under and a reconnect is the only fix.
+      logger.warn(
+        'ads profile has no seller id and its user has no SP-API connection',
+        { userId: profile.user_id, profileId: profile.advertiser_profile_id }
+      );
+      return [];
+    }
+    return [{ ...profile, sellerId }];
+  });
 }
 
 /**
@@ -147,16 +223,17 @@ function clientFor(item: WorkItem): AmazonAdsApiClient {
   // signatures `AdsReportClient` declares, so an adapter here would only be a
   // place for the two to drift apart.
   return new AmazonAdsApiClient({
-    // Not a credential. The real client id arrives with the minted token, and
-    // this field is unused on the mint path — see `SpApiClientConfig.clientId`.
-    clientId: 'minted-by-credential-service',
-    marketplaceId: 'ATVPDKIKX0DER',
+    clientId: item.clientId,
+    // The profile's own marketplace, not a hardcoded US. This account holds
+    // CA, MX and BR profiles, and every one of them was being told it was US.
+    marketplaceId: item.marketplaceId,
+    region: (item.region ?? 'NA') as 'NA' | 'EU' | 'FE',
     profileId: item.profileId,
     mintAccessToken: () =>
       mintSellerAccessToken({
         onBehalfOf: item.userId,
         apiType: 'ADS_API',
-        profileName: item.profileId,
+        profileName: item.profileName,
         sellerId: item.sellerId,
         // The shed tripwire's unit. Ads has no sync domain of its own, so the
         // report kind is what identifies this work.
@@ -173,27 +250,28 @@ export async function handler(event: AdsSyncEvent): Promise<unknown> {
     const from = new Date(to);
     from.setUTCDate(from.getUTCDate() - (WINDOW_DAYS - 1));
 
-    const profiles = await eligibleProfiles();
+    const profiles = await profilesWithSeller();
     const items: WorkItem[] = [];
     for (const profile of profiles) {
-      if (!profile.seller_id) {
-        // Named rather than skipped silently: a profile with no seller id is a
-        // connection that cannot store what it fetches, and the fix is a
-        // reconnect rather than anything this run can do.
-        logger.warn(
-          'ads profile has no seller id, so its rows have nowhere to go',
-          {
-            userId: profile.user_id,
-            profileId: profile.advertiser_profile_id,
-          }
-        );
+      const sellerId = profile.sellerId;
+      if (!profile.client_id) {
+        // Without the LWA app id every Ads request is rejected with a bare 400,
+        // so planning the work would only produce failures an hour later.
+        logger.warn('ads profile has no client id, so it cannot be called', {
+          userId: profile.user_id,
+          profileId: profile.advertiser_profile_id,
+        });
         continue;
       }
       for (const kind of KINDS) {
         items.push({
           userId: profile.user_id,
           profileId: profile.advertiser_profile_id,
-          sellerId: profile.seller_id,
+          profileName: profile.profile_name,
+          clientId: profile.client_id,
+          marketplaceId: profile.marketplace_id ?? 'ATVPDKIKX0DER',
+          region: profile.region,
+          sellerId,
           kind,
           from: isoDay(from),
           to: isoDay(to),
@@ -222,7 +300,7 @@ export async function handler(event: AdsSyncEvent): Promise<unknown> {
 
   if (event.step === 'reconcile') {
     const now = event.now ? Date.parse(event.now) : Date.now();
-    const profiles = await eligibleProfiles();
+    const profiles = await profilesWithSeller();
 
     let due = 0;
     let ready = 0;
@@ -230,10 +308,10 @@ export async function handler(event: AdsSyncEvent): Promise<unknown> {
 
     for (const profile of profiles) {
       // A funnel belongs to a user, its campaigns to a profile, and the rows to
-      // a seller. All three are needed and none substitutes for another; a
-      // profile with no seller has no rows to read and is skipped rather than
-      // reconciled against another account's numbers.
-      if (!profile.seller_id) continue;
+      // a seller. The seller is the ads profile's own when it has one and the
+      // account's SP-API seller otherwise — the same account either way, which
+      // is what makes the substitution safe. A profile whose user has neither
+      // was already dropped by `profilesWithSeller`.
 
       try {
         const summary = await reconcileDueNegatives({
@@ -242,7 +320,7 @@ export async function handler(event: AdsSyncEvent): Promise<unknown> {
           now,
           readRows: (query) =>
             queryHarvestRows({
-              sellerId: profile.seller_id as string,
+              sellerId: profile.sellerId,
               from: query.from,
               to: query.to,
               campaignIds: query.campaignIds,
