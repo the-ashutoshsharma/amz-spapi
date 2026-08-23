@@ -11,10 +11,21 @@
  * models.
  *
  * The rules:
- *  - Max 75 characters including spaces, in every category EXCEPT media
- *    (books, music, video — drawn narrowly). This replaced the previous
- *    200-character general limit and the 125-character apparel limit; apparel
- *    is no longer a special case.
+ *  - Max 75 characters including spaces, in every category EXCEPT media.
+ *    This replaced the previous 200-character general limit AND every
+ *    category-specific cap — apparel 125, electronics 150, pet supplies 80.
+ *    None of them survive; there is one limit now.
+ *
+ *    Two things the announcement does NOT settle, so both are assumptions:
+ *
+ *    1. What media's own limit is. Amazon names media as excepted and stops.
+ *       Reporting infers it keeps the old 200 and that is what `media: true`
+ *       returns, but Amazon has not said so and sellers asking in the
+ *       announcement thread have not been answered.
+ *    2. Exactly what counts as media. Most sources read it narrowly — books,
+ *       music, video — while some include software or DVD. The narrow reading
+ *       is the safe one: treating a category as media when it is not means
+ *       certifying a title that Amazon will rewrite.
  *  - `Item Highlights` is a separate, searchable 125-character field carrying
  *    what no longer fits — materials, compatibility, age range, use case. It
  *    is indexed and shown beside the title, so the total indexable space is
@@ -27,8 +38,12 @@
  *  - No word more than twice, prepositions/articles/conjunctions excepted.
  *    Amazon counts plurals and word variants as repeats.
  *  - Enforcement: Amazon generates a replacement title and Item Highlights
- *    for over-long listings. Only BRAND-REGISTERED sellers get a 14-day
- *    review window before it is applied; everyone else is simply rewritten.
+ *    for over-long listings, gradually and on its own schedule. Only
+ *    BRAND-REGISTERED sellers get a 14-day review window before it is
+ *    applied; everyone else is rewritten with no notification and no opt-out.
+ *    Announced for 2026-07-27; enforcement in fact began 2026-07-26 and was
+ *    extended to 2026-08-03, with the Item Highlights display change landing
+ *    2026-08-10. Listings stay active throughout.
  *
  * ## Why the effective date is in the prompt
  *
@@ -149,9 +164,11 @@ export function validateListingTitle(
       'Forbidden characters are allowed inside a registered brand name — ' +
         'if one flagged here is part of the brand, say so explicitly.',
       options.media
-        ? 'Checked against the 200-character MEDIA limit. Every other ' +
-          'category is 75 — if this is not books, music or video, re-check ' +
-          'without the media flag.'
+        ? 'Checked against 200 for media. Amazon excepted media WITHOUT ' +
+          'stating its limit, so 200 is inferred from the old rule, not ' +
+          'announced — say so rather than certifying it. And media is drawn ' +
+          'narrowly: books, music, video. If this is anything else, re-check ' +
+          'without the media flag, because 75 applies.'
         : 'Checked against the 75-character limit that applies to every ' +
           'category except media (books, music, video). What will not fit ' +
           'belongs in Item Highlights, a separate searchable 125-character ' +
