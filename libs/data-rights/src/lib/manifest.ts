@@ -132,6 +132,10 @@ export const OWNERSHIP: CollectionOwnership[] = [
 
   // ── Ops ───────────────────────────────────────────────────────────────────
   { collection: 'ops_cost_ledger', ownership: userField() },
+  // The request's paperwork, not the rows it produced — those are filed under
+  // the report store's own entries. Both the job and its delivery claim carry
+  // `userId`, so one sweep covers the pair.
+  { collection: 'ops_report_jobs', ownership: userField() },
   {
     collection: 'ops_spend_counters',
     ownership: {

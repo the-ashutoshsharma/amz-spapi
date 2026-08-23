@@ -18,6 +18,7 @@ import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
 import { LambdaHttpApi } from './lambda-http-api.js';
 import { SyncWiring } from './sync-wiring.js';
 import { AdsSyncWiring } from './ads-sync-wiring.js';
+import { ReportJobsWiring } from './report-jobs-wiring.js';
 import { ApiMonitoring } from './monitoring.js';
 
 export type LambdasStackProps = cdk.StackProps & {
@@ -223,6 +224,18 @@ export class LambdasStack extends Stack {
       new AdsSyncWiring(this, 'AdsSync', {
         config: props.config,
         worker: adsWorker,
+        alarmTopic: this.monitoring.topic,
+      });
+    }
+
+    // Reports a person asked for in chat. Same shape as the ads sync and for
+    // the same reason — minutes of waiting — but started by the web app rather
+    // than a schedule, because every execution is somebody waiting for it.
+    const reportJobWorker = this.functions.get('report-job-worker');
+    if (reportJobWorker) {
+      new ReportJobsWiring(this, 'ReportJobs', {
+        config: props.config,
+        worker: reportJobWorker,
         alarmTopic: this.monitoring.topic,
       });
     }

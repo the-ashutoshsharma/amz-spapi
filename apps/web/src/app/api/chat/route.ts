@@ -248,7 +248,7 @@ export async function POST(request: Request) {
   // Ads without ever connecting a Seller account — gating ads tools on SP
   // credentials would hide them from exactly that user. It resolves its own
   // connections per call, so constructing it is free.
-  const adsOps = createAdsOps({ userId: session.user.sub });
+  const adsOps = createAdsOps({ userId: session.user.sub, chatId, sellerId });
 
   /**
    * Keyword harvest funnels (#147).
@@ -325,6 +325,9 @@ export async function POST(request: Request) {
         sellerId,
         spClient,
         marketplaceId: userMarketplaceId,
+        userId: session.user.sub,
+        chatId,
+        profileName: spConnection?.profileName,
       });
     }
 

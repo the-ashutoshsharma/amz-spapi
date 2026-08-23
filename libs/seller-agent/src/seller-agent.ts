@@ -3965,19 +3965,40 @@ function getAdsWriteTools(
 }
 
 function getReportTools(reportOps: SellerReportOps) {
-  const kindSchema = z.enum([
-    'ledger-detail',
-    'ledger-summary',
-    'stranded',
-    'removal-order',
-    'removal-shipment',
-    'reimbursement',
-    'inbound-performance',
-    'settlement',
-    'storage-fee',
-    'search-term',
-    'campaign-performance',
-  ]);
+  const kindSchema = z
+    .enum([
+      'ledger-detail',
+      'ledger-summary',
+      'stranded',
+      'removal-order',
+      'removal-shipment',
+      'reimbursement',
+      'inbound-performance',
+      'settlement',
+      'storage-fee',
+      'search-term',
+      'campaign-performance',
+      'campaign-performance-summary',
+    ])
+    .describe(
+      'Which Amazon report. The two ledger kinds are the SAME events at ' +
+        'different grain: ledger-detail is one row per event (eventType, ' +
+        'quantity, reason, referenceId) and ledger-summary is Amazon ' +
+        'pre-aggregating those same events into per-day columns ' +
+        '(customerShipments, receipts, startingBalance, endingBalance). ' +
+        'Detail is therefore STRICTLY RICHER: anything summary answers, ' +
+        'detail answers by totalling rows with total-report-rows filtered on ' +
+        'eventType — daily shipped units is eventType "Shipments", receipts is ' +
+        '"Receipts", and so on. Never send the user back to Seller Central for ' +
+        'a summary export when detail for that window is already held; check ' +
+        'coverage for BOTH before asking for a file. ' +
+        'The two ads campaign kinds split the same way and for the same ' +
+        'reason: campaign-performance is ONE ROW PER CAMPAIGN PER DAY from the ' +
+        'API, campaign-performance-summary is ONE ROW PER CAMPAIGN over a ' +
+        'window from a hand export. NEVER total the two together — the summary ' +
+        'row already contains the days beside it, so summing both counts the ' +
+        'same spend twice.'
+    );
 
   return {
     'get-inventory-ledger': {
@@ -4296,12 +4317,22 @@ function getReportTools(reportOps: SellerReportOps) {
           const coverage = await reportOps.getCoverage(input);
           return {
             success: true as const,
+            // `coverage.kind` already names the report this describes. The
+            // failure was never a missing field — it was the model quoting a
+            // window without saying which kind it belonged to, which is what
+            // the note below exists to stop.
             ...coverage,
-            note: coverage.gaps.length
-              ? 'There are gaps. Say so explicitly rather than treating missing ' +
-                'rows as evidence of missing units, and offer to sync or ask the ' +
-                'user to upload the export for those windows.'
-              : undefined,
+            note:
+              `This is coverage for ${input.kind} and nothing else. ALWAYS name ` +
+              'the report kind when you quote a covered window or a gap. If the ' +
+              'user has just imported something and this looks short, check the ' +
+              'kind THEY imported before suggesting the import failed — the two ' +
+              'ledger kinds are stored separately and have separate coverage. ' +
+              (coverage.gaps.length
+                ? 'There are gaps. Say so explicitly rather than treating ' +
+                  'missing rows as evidence of missing units, and offer to sync ' +
+                  'or ask the user to upload the export for those windows.'
+                : ''),
           };
         } catch (error) {
           return {

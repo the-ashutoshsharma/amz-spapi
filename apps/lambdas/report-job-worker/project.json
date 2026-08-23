@@ -1,0 +1,54 @@
+{
+  "name": "lambda-report-job-worker",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/lambdas/report-job-worker/src",
+  "projectType": "application",
+  "tags": ["scope:lambda", "type:app"],
+  "metadata": {
+    "lambda": {
+      "packaging": "zip",
+      "handler": "main.handler",
+      "description": "One step of a chat-initiated Amazon report: request or collect. Driven by the report-jobs state machine.",
+      "timeoutSeconds": 60,
+      "memoryMb": 512,
+      "couchbase": true,
+      "callsCredentialService": true
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/lambdas/report-job-worker",
+        "main": "apps/lambdas/report-job-worker/src/main.ts",
+        "tsConfig": "apps/lambdas/report-job-worker/tsconfig.app.json",
+        "platform": "node",
+        "format": ["esm"],
+        "bundle": true,
+        "thirdParty": true,
+        "minify": false,
+        "sourcemap": true,
+        "generatePackageJson": false,
+        "esbuildOptions": {
+          "outExtension": {
+            ".js": ".js"
+          },
+          "banner": {
+            "js": "import { createRequire as __nodeCreateRequire } from 'node:module';const require = __nodeCreateRequire(import.meta.url);"
+          }
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../../coverage/apps/lambdas/report-job-worker"
+      }
+    }
+  }
+}

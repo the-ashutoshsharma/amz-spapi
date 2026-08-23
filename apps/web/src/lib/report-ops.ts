@@ -9,6 +9,7 @@ import {
   type ReportKind,
 } from '@amz-spapi/sp-cache';
 import type { SellerReportOps } from '@amz-spapi/seller-agent';
+import { startReportJob } from './report-jobs-client';
 
 /**
  * Host implementation of FBA report ingestion for the agent.
@@ -20,8 +21,48 @@ export function createReportOps(params: {
   sellerId: string;
   spClient: SpApiClient;
   marketplaceId: string;
+  /** Who to tell, and where. Absent means no background delivery is possible. */
+  userId?: string;
+  chatId?: string;
+  /**
+   * The stored credential's name for this seller's SP-API connection.
+   *
+   * NOT derivable in the worker: credentials are keyed
+   * `${apiType}::${userId}::${profileName}`, and only the web app — which
+   * resolved the connection — knows which profile answered. Without it the
+   * worker mints against `SP_API::<userId>::` and fails minutes later.
+   */
+  profileName?: string;
 }): SellerReportOps {
   return {
+    /**
+     * Queue the pull rather than hold the turn open.
+     *
+     * Only offered when there is a conversation to deliver into: a job with no
+     * chat would run, cost money, and have nobody to tell.
+     */
+    ...(params.userId && params.chatId
+      ? {
+          startReportJob: async ({ kind, from, to }) => {
+            const result = await startReportJob({
+              userId: params.userId as string,
+              chatId: params.chatId as string,
+              sellerId: params.sellerId,
+              kind: 'fba-report',
+              request: {
+                reportKind: kind,
+                from,
+                to,
+                marketplaceId: params.marketplaceId,
+                profileName: params.profileName,
+              },
+            });
+            return result.started
+              ? { started: true, jobId: result.job.jobId }
+              : { started: false, error: result.error };
+          },
+        }
+      : {}),
     async syncReport({ kind, from, to }) {
       const result = await syncReport({
         client: params.spClient,

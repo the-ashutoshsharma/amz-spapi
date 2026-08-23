@@ -147,3 +147,99 @@ describe('get-payout-breakdown', () => {
     );
   });
 });
+
+/**
+ * A seller exported the Inventory Ledger from Seller Central, imported it, and
+ * was told the data was not there.
+ *
+ * The import was perfect — 5,592 new rows covering to 2026-08-22, filed as
+ * `ledger-detail`. The agent then checked coverage for `ledger-summary`, which
+ * genuinely ended 2026-07-16, and reported "coverage still only goes to July
+ * 16" without saying which of the two ledgers it meant. To someone who had
+ * just imported a file covering August, that reads as one thing only: the
+ * import failed.
+ *
+ * It then asked them to go back to Seller Central and re-export the Summary
+ * view — for a question the Detail file already answered. The two are the same
+ * events at different grain: summary is Amazon pre-aggregating detail into
+ * per-day columns, so daily shipped units is detail rows with
+ * eventType "Shipments" totalled by date. Verified against the live account:
+ * 2,522 Shipments rows were sitting there the whole time.
+ *
+ * Two failures, both of confidence rather than capability — an unqualified
+ * coverage claim, and manual work requested for data already held.
+ */
+describe('the two ledger kinds are not confused for each other', () => {
+  function kindGuidance(): string {
+    // The relationship lives on the shared `kind` schema, so every tool that
+    // takes a report kind carries it rather than one tool knowing it.
+    const tools = agent().tools as unknown as Record<
+      string,
+      { inputSchema?: { shape?: { kind?: { description?: string } } } }
+    >;
+    return (
+      tools['check-report-coverage']?.inputSchema?.shape?.kind?.description ??
+      ''
+    );
+  }
+
+  it('describes detail as the same events at finer grain, not a different report', () => {
+    expect(kindGuidance()).toMatch(/SAME events at different grain/i);
+  });
+
+  it('says detail is strictly richer, so summary is never required', () => {
+    expect(kindGuidance()).toMatch(/strictly richer/i);
+  });
+
+  it('names the substitution that answers a summary question from detail', () => {
+    // Without the eventType mapping the model knows detail *could* work but
+    // not how, and asking for a re-export is the cheaper-looking option.
+    expect(kindGuidance()).toMatch(/eventType/);
+    expect(kindGuidance()).toMatch(/Shipments/);
+  });
+
+  it('forbids sending the user back to Seller Central for held data', () => {
+    expect(kindGuidance()).toMatch(
+      /[Nn]ever send the user back to Seller Central/
+    );
+  });
+
+  it('tells the model to check the other kind before blaming the import', () => {
+    expect(kindGuidance()).toMatch(/check coverage for BOTH/i);
+  });
+
+  it('returns a coverage result that names the kind it describes', async () => {
+    // Executed rather than read: the note is built at call time from the
+    // requested kind, and a covered window quoted with no label is the whole
+    // misunderstanding this guards.
+    const withCoverage = createSellerAgent({
+      provider,
+      marketplaceId: 'ATVPDKIKX0DER',
+      spCache: { hasSellerId: () => true },
+      reportOps: {
+        getPayoutBreakdown: async () => ({ payouts: [], unreconciled: 0 }),
+        getCoverage: async () => ({
+          kind: 'ledger-summary',
+          covered: [{ from: '2026-03-01', to: '2026-07-16' }],
+          gaps: [],
+          filtersUsed: [],
+          imports: 3,
+        }),
+      },
+    } as never) as unknown as {
+      tools: Record<
+        string,
+        { execute: (input: unknown) => Promise<{ note?: string }> }
+      >;
+    };
+
+    const result = await withCoverage.tools['check-report-coverage'].execute({
+      kind: 'ledger-summary',
+    });
+
+    expect(result.note).toContain('ledger-summary');
+    // "Coverage ends July 16" with no kind is what read as "your import
+    // failed" to someone who had just imported ledger-detail.
+    expect(result.note).toMatch(/ALWAYS name the report kind/i);
+  });
+});

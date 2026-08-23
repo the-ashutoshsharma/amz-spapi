@@ -146,7 +146,23 @@ export class AmazonAdsApiClient {
     });
 
     // Add request interceptor to inject current access token
-    this.httpClient.interceptors.request.use((config) => {
+    this.httpClient.interceptors.request.use(async (config) => {
+      /**
+       * A client that CAN get a token and has none must get one here.
+       *
+       * The refresh interceptor below only fires on 401, and an Ads request
+       * with no `Authorization` header does not come back 401 — it comes back
+       * **400** with "Either no authorization values are specified or it could
+       * not be derived from the request". So the retry path never sees it, and
+       * the caller gets a bare 400 that reads like a malformed report request.
+       *
+       * Callers that mint up front (the web app awaits a token before
+       * constructing) never reach this; callers that pass only
+       * `mintAccessToken` — the Lambda workers — always did.
+       */
+      if (!this.config.accessToken && this.canRefresh()) {
+        await this.refreshAccessToken();
+      }
       if (this.config.accessToken) {
         config.headers.Authorization = `Bearer ${this.config.accessToken}`;
       }
