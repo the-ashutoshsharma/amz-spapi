@@ -106,3 +106,4 @@ opencode.json
 # exact failure the pnpm migration was undertaken to surface. Ignored so it
 # cannot be committed and cannot change which package manager a tool picks.
 package-lock.json
+.env*
