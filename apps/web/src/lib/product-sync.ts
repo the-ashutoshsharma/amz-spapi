@@ -474,18 +474,34 @@ export async function syncAmazonProducts(
         const variantTitle =
           options.map((option) => option.value).join(' / ') || undefined;
         const existingForAsin = existingByAsin.get(asin) ?? [];
-        // Reuse (and re-point) the ASIN's existing variant so its identity —
-        // and any asset links — survive the merge; otherwise create one.
-        const variantId = existingForAsin[0]?.variantId ?? createVariantId();
-        await upsertVariant({
-          variantId,
-          productId,
-          userId,
-          isDefault: !multiVariant,
-          options,
-          identifiers: { asin },
-          title: variantTitle,
-        });
+
+        /**
+         * A variant only when the product actually varies.
+         *
+         * A single-ASIN product used to get one anyway — `isDefault: true`,
+         * no options — because a listing was required to name a variant. That
+         * placeholder then read as a variation family of one on the product
+         * page, repeating the ASIN of the listing beside it.
+         *
+         * `variantId` is optional on a listing now, so a listing on a
+         * non-varying product sells the product itself and says so by having
+         * none. `multiVariant` was already computed here; it just had no way
+         * to express the answer.
+         */
+        let variantId: string | undefined;
+        if (multiVariant) {
+          // Reuse (and re-point) the ASIN's existing variant so its identity —
+          // and any asset links — survive the merge; otherwise create one.
+          variantId = existingForAsin[0]?.variantId ?? createVariantId();
+          await upsertVariant({
+            variantId,
+            productId,
+            userId,
+            options,
+            identifiers: { asin },
+            title: variantTitle,
+          });
+        }
 
         // One listing per seller SKU (each FBA SKU has its own FNSKU).
         for (const item of byAsin.get(asin) ?? []) {

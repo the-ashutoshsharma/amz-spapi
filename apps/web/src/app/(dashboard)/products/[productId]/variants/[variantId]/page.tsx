@@ -46,9 +46,7 @@ export default function VariantDetailPage() {
     void load();
   }, [load]);
 
-  const variantName =
-    data?.variant.title ||
-    (data?.variant.isDefault ? 'Default variant' : 'Variant');
+  const variantName = data?.variant.title || 'Variant';
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
@@ -81,9 +79,6 @@ export default function VariantDetailPage() {
               <span className="text-xs">
                 ASIN {data.variant.identifiers.asin}
               </span>
-            ) : null}
-            {data.variant.isDefault ? (
-              <span className="text-xs">Default variant</span>
             ) : null}
           </div>
 

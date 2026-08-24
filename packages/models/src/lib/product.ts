@@ -11,8 +11,11 @@ import { z } from 'zod';
  * Identity/upsert rules:
  *  - `productId` / `variantId` / `listingId` are server-generated and stable —
  *    they are the identity. Amazon/Shopify/manual products all use the same ids.
- *  - A single-SKU product always has exactly ONE variant with `isDefault: true`
- *    so downstream code is uniformly Product → [Variant] → [Listing].
+ *  - A product has variants only when it VARIES. A single-SKU product has
+ *    none, and its listing carries no `variantId`. Downstream is therefore
+ *    Product → [Variant?] → [Listing], not a uniform three levels: the
+ *    uniformity used to be bought with a placeholder variant, which the
+ *    product page then displayed as a variation family of one.
  *  - Product core fields (title, description, brand, category, sourcing) are
  *    USER-OWNED. Amazon sync writes catalog data into `ProductListing.snapshot`
  *    and must NOT overwrite edited Product fields (except on first creation, or
@@ -111,7 +114,6 @@ export const ProductVariantSchema = z.object({
   productId: z.string(),
   userId: z.string(),
   title: z.string().optional(), // e.g. "Blue / Large"
-  isDefault: z.boolean().optional(),
   options: z
     .array(z.object({ name: z.string(), value: z.string() }))
     .default([]), // e.g. [{name:'Color',value:'Blue'}]
@@ -176,7 +178,24 @@ export type ListingSnapshot = z.infer<typeof ListingSnapshotSchema>;
 export const ProductListingSchema = z.object({
   listingId: z.string(),
   productId: z.string(),
-  variantId: z.string(),
+  /**
+   * The variant this listing sells, when the product HAS variants.
+   *
+   * Optional, because most products do not vary. Requiring it meant every
+   * product was created with a placeholder variant — `isDefault: true`, no
+   * options — purely so listings had something to point at. That row then
+   * surfaced as "Variants (1) — Default variant" on the product page,
+   * repeating the ASIN of the listing beside it, and a seller read it as a
+   * parent-child relationship they never created.
+   *
+   * A listing with no `variantId` sells the product itself. Absent means "this
+   * product does not vary", which is a fact worth being able to state; a
+   * placeholder cannot state it, because it looks identical to a family of one.
+   *
+   * Readers must treat this as genuinely optional — grouping listings by it,
+   * or keying a lookup on it, silently drops every non-varying product.
+   */
+  variantId: z.string().optional(),
   userId: z.string(),
   platform: PlatformSchema,
   marketplaceId: z.string().optional(), // Amazon marketplace; Shopify shop domain later

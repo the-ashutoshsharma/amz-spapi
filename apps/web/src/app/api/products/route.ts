@@ -4,11 +4,7 @@ import {
   listProducts,
   upsertProduct,
 } from '../../../lib/products';
-import {
-  createVariantId,
-  listAllVariants,
-  upsertVariant,
-} from '../../../lib/product-variants';
+import { listAllVariants } from '../../../lib/product-variants';
 import { listVariantThumbnails } from '../../../lib/product-listings';
 
 export async function GET() {
@@ -57,8 +53,14 @@ export async function GET() {
 }
 
 /**
- * Create a product manually (no Amazon required). Always seeds one default
- * variant so downstream is uniformly Product → [Variant] → [Listing].
+ * Create a product manually (no Amazon required).
+ *
+ * No variant is seeded. It used to create one — `isDefault: true`, no options
+ * — so that downstream was uniformly Product → Variant → Listing, and a
+ * listing always had a variant to name. That uniformity was bought by asserting
+ * a variation family for every product ever created, which the product page
+ * then displayed. A listing's `variantId` is optional now, so a product that
+ * does not vary simply has no variants, which is the true statement.
  */
 export async function POST(request: Request) {
   const session = await auth0.getSession();
@@ -99,13 +101,5 @@ export async function POST(request: Request) {
     status: 'active',
   });
 
-  const variant = await upsertVariant({
-    variantId: createVariantId(),
-    productId,
-    userId,
-    isDefault: true,
-    options: [],
-  });
-
-  return Response.json({ product, variant }, { status: 201 });
+  return Response.json({ product }, { status: 201 });
 }
