@@ -5556,8 +5556,9 @@ export function createSellerAgent({
     'check-listing-title': {
       description:
         'Check a product listing title against Amazon’s title policy ' +
-        '(effective 2025-01-21): 200-character limit (125 for apparel — set ' +
-        'apparel:true), forbidden characters, and the twice-per-word ' +
+        '(effective 2026-07-27): 75-character limit in every category except ' +
+        'media (books, music, video — set media:true for those, which keeps ' +
+        'the old 200), forbidden characters, and the twice-per-word ' +
         'repetition rule. Run this on EVERY title you are about to ' +
         'recommend, write, or judge, and fix what it reports before ' +
         'presenting the title. Repeat its caveats to the seller — it counts ' +
@@ -5565,13 +5566,16 @@ export function createSellerAgent({
         'variants.',
       inputSchema: z.object({
         title: z.string().describe('The exact title text to check.'),
-        apparel: z
+        media: z
           .boolean()
           .optional()
-          .describe('True for apparel categories (125-character limit).'),
+          .describe(
+            'True ONLY for books, music or video, which keep the old ' +
+              '200-character limit. Everything else is 75.'
+          ),
       }),
-      execute: async (input: { title: string; apparel?: boolean }) =>
-        validateListingTitle(input.title, { apparel: input.apparel }),
+      execute: async (input: { title: string; media?: boolean }) =>
+        validateListingTitle(input.title, { media: input.media }),
     },
     ...spTools,
     ...listingsTools,
