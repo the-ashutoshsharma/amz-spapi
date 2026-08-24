@@ -146,8 +146,32 @@ describe('syncAmazonProducts', () => {
 
     // A new id here would orphan the authored definition just as effectively as
     // overwriting it, and would not show up as a write to the old document.
-    expect(upsertVariant).toHaveBeenCalledWith(
+    // Asserted on the LISTING, not the variant: a single-ASIN product no
+    // longer gets one, so the variant stopped being an observable of this.
+    expect(upsertListing).toHaveBeenCalledWith(
       expect.objectContaining({ productId: 'prod_existing' })
     );
+  });
+
+  it('creates no variant for a product that does not vary', async () => {
+    findListingBySku.mockResolvedValue(existingListing());
+
+    await syncAmazonProducts('auth0|seller');
+
+    // The placeholder this replaces was `isDefault: true` with no options, and
+    // the product page rendered it as "Variants (1) — Default variant" beside
+    // the very listing whose ASIN it repeated.
+    expect(upsertVariant).not.toHaveBeenCalled();
+  });
+
+  it('leaves the listing with no variant to name', async () => {
+    findListingBySku.mockResolvedValue(existingListing());
+
+    await syncAmazonProducts('auth0|seller');
+
+    const [written] = upsertListing.mock.calls[0] as [{ variantId?: string }];
+    // Absent, not empty-string: "this product does not vary" is a fact the
+    // model can now state, and a placeholder could not.
+    expect(written.variantId).toBeUndefined();
   });
 });

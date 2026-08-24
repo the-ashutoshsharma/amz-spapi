@@ -314,8 +314,7 @@ export default function ProductDetailPage() {
                       className="-mx-2 flex flex-wrap items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted"
                     >
                       <span className="font-medium">
-                        {variant.title ||
-                          (variant.isDefault ? 'Default variant' : 'Variant')}
+                        {variant.title || 'Variant'}
                       </span>
                       {variant.options.map((option) => (
                         <span
