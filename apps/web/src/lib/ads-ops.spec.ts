@@ -60,6 +60,18 @@ vi.mock('./amazon-clients', () => ({
     }),
 }));
 
+/**
+ * The background report runner, stubbed. What matters here is not that a state
+ * machine starts, but WHICH profile and seller the job is created against —
+ * resolving that after the job exists would let a queued job run for a
+ * different advertiser account than the user was answered about.
+ */
+const { startReportJob } = vi.hoisted(() => ({ startReportJob: vi.fn() }));
+
+vi.mock('./report-jobs-client', () => ({
+  startReportJob: (...args: unknown[]) => startReportJob(...args),
+}));
+
 const { createAdsOps } = await import('./ads-ops');
 
 function connection(
@@ -225,5 +237,122 @@ describe('connections that cannot actually be used', () => {
     await ops.listCampaigns({});
 
     expect(listCampaigns).toHaveBeenCalledOnce();
+  });
+});
+
+describe('queueing a performance report', () => {
+  const withSeller = {
+    profile: {
+      ...connection('967757046531288', 'ATVPDKIKX0DER').profile,
+      seller_id: 'A1SELLER',
+    },
+  };
+  const input = {
+    level: 'campaign' as const,
+    startDate: '2026-08-01',
+    endDate: '2026-08-07',
+  };
+
+  beforeEach(() => {
+    startReportJob.mockReset().mockResolvedValue({
+      started: true,
+      job: { jobId: 'job-1' },
+    });
+    listAmazonConnections.mockResolvedValue([withSeller]);
+  });
+
+  it('files the job against the RESOLVED profile and its seller', async () => {
+    const ops = createAdsOps({ userId: 'auth0|1', chatId: 'chat_1' });
+
+    const result = await ops.startPerformanceReportJob?.(input);
+
+    expect(result).toEqual({ started: true, jobId: 'job-1' });
+    expect(startReportJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'auth0|1',
+        chatId: 'chat_1',
+        sellerId: 'A1SELLER',
+        kind: 'ads-performance',
+        request: expect.objectContaining({
+          profileId: '967757046531288',
+          // Distinct from the profile id, and required: credentials are keyed
+          // on the profile NAME, so a job carrying only the id cannot mint a
+          // token and fails minutes later inside a Lambda.
+          profileName: 'ads-ATVPDKIKX0DER',
+          // Sent as a header on every Ads request; a placeholder is a 400.
+          clientId: 'client',
+          marketplaceId: 'ATVPDKIKX0DER',
+          level: 'campaign',
+        }),
+      })
+    );
+  });
+
+  it('falls back to the account seller when the ads profile carries none', async () => {
+    // None of the live ads profiles have a `seller_id`, and an ads report does
+    // not need one — the Amazon call is scoped by profileId and nothing is
+    // filed under a seller. Requiring it here silently sent every ads report
+    // back down the old in-turn path.
+    listAmazonConnections.mockResolvedValue([
+      connection('967757046531288', 'ATVPDKIKX0DER'),
+    ]);
+    const ops = createAdsOps({
+      userId: 'auth0|1',
+      chatId: 'chat_1',
+      sellerId: 'A1ACCOUNT',
+    });
+
+    const result = await ops.startPerformanceReportJob?.(input);
+
+    expect(result).toEqual({ started: true, jobId: 'job-1' });
+    expect(startReportJob).toHaveBeenCalledWith(
+      expect.objectContaining({ sellerId: 'A1ACCOUNT' })
+    );
+  });
+
+  it("prefers the ads profile's own seller when it has one", async () => {
+    const ops = createAdsOps({
+      userId: 'auth0|1',
+      chatId: 'chat_1',
+      sellerId: 'A1ACCOUNT',
+    });
+
+    await ops.startPerformanceReportJob?.(input);
+
+    expect(startReportJob).toHaveBeenCalledWith(
+      expect.objectContaining({ sellerId: 'A1SELLER' })
+    );
+  });
+
+  it('refuses only when no seller is known at all', async () => {
+    listAmazonConnections.mockResolvedValue([
+      connection('967757046531288', 'ATVPDKIKX0DER'),
+    ]);
+    const ops = createAdsOps({ userId: 'auth0|1', chatId: 'chat_1' });
+
+    const result = await ops.startPerformanceReportJob?.(input);
+
+    expect(result?.started).toBe(false);
+    expect(startReportJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses when there is no conversation to deliver into', async () => {
+    const ops = createAdsOps({ userId: 'auth0|1' });
+
+    const result = await ops.startPerformanceReportJob?.(input);
+
+    // A job with no chat would run, cost money, and have nobody to tell.
+    expect(result?.started).toBe(false);
+    expect(startReportJob).not.toHaveBeenCalled();
+  });
+
+  it('still refuses to guess between profiles when queueing', async () => {
+    listAmazonConnections.mockResolvedValue(FOUR_PROFILES);
+    const ops = createAdsOps({ userId: 'auth0|1', chatId: 'chat_1' });
+
+    await expect(ops.startPerformanceReportJob?.(input)).rejects.toThrow(
+      /4 advertiser profiles/
+    );
+    expect(startReportJob).not.toHaveBeenCalled();
   });
 });

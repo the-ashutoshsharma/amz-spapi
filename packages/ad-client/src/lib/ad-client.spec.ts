@@ -765,3 +765,91 @@ describe('create requests', () => {
     ).rejects.toThrow(/defaultBid/);
   });
 });
+
+/**
+ * A client given a way to get a token, and no token.
+ *
+ * The Lambda workers construct exactly this way — they cannot mint up front
+ * without making construction async, so they pass `mintAccessToken` alone. The
+ * request interceptor originally set `Authorization` only when a token was
+ * already present, so those requests went out unauthenticated.
+ *
+ * That does NOT come back 401, which is what the refresh interceptor watches
+ * for. Amazon answers 400 with "Either no authorization values are specified or
+ * it could not be derived from the request" — so the retry path never fired and
+ * the caller saw a bare 400 that reads like a malformed report. It cost three
+ * deploys to find.
+ *
+ * These stub the axios ADAPTER rather than replacing `httpClient`, because
+ * replacing the transport skips the interceptors that are the thing under test.
+ */
+describe('a client holding no access token', () => {
+  function withAdapter(config: Record<string, unknown>) {
+    const client = new AmazonAdsApiClient({
+      clientId: 'amzn1.application-oa2-client.test',
+      marketplaceId: 'ATVPDKIKX0DER',
+      profileId: '967757046531288',
+      ...config,
+    } as never);
+    const seen: Array<Record<string, unknown>> = [];
+    const http = (
+      client as unknown as {
+        httpClient: { defaults: Record<string, unknown> };
+      }
+    ).httpClient;
+    http.defaults['adapter'] = async (cfg: {
+      headers: Record<string, unknown>;
+    }) => {
+      seen.push(cfg.headers);
+      return {
+        data: { campaigns: [] },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: cfg,
+      };
+    };
+    return { client, seen };
+  }
+
+  it('mints one before the first request rather than sending none', async () => {
+    const mintAccessToken = vi.fn(async () => 'minted-token');
+    const { client, seen } = withAdapter({ mintAccessToken });
+
+    await client.listCampaigns();
+
+    expect(mintAccessToken).toHaveBeenCalledTimes(1);
+    expect(seen[0]?.['Authorization']).toBe('Bearer minted-token');
+  });
+
+  it('still scopes the request to the advertiser profile', async () => {
+    const { client, seen } = withAdapter({
+      mintAccessToken: async () => 'minted-token',
+    });
+
+    await client.listCampaigns();
+
+    // Every Sponsored Products call needs this or it 401s on everything.
+    expect(seen[0]?.['Amazon-Advertising-API-Scope']).toBe('967757046531288');
+  });
+
+  it('does not mint again once it holds a token', async () => {
+    const mintAccessToken = vi.fn(async () => 'minted-token');
+    const { client } = withAdapter({ mintAccessToken });
+
+    await client.listCampaigns();
+    await client.listCampaigns();
+
+    // The minted token is kept on the config, so a second call reuses it.
+    expect(mintAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends no Authorization header when it has no way to get one', async () => {
+    const { client, seen } = withAdapter({});
+
+    await client.listCampaigns();
+
+    // Nothing to mint and nothing to send: better an honest 400 than a hang.
+    expect(seen[0]?.['Authorization']).toBeUndefined();
+  });
+});

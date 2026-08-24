@@ -99,6 +99,20 @@ export function isAdsReportKind(kind: ReportKind): kind is AdsReportKind {
   return (ADS_REPORT_KINDS as readonly ReportKind[]).includes(kind);
 }
 
+/**
+ * Whose synced windows an uploaded ads file could double-count.
+ *
+ * Not the same question as `isAdsReportKind`, which asks what the API can be
+ * asked to BUILD. A console campaign export cannot be requested at all, but it
+ * carries the same spend as the daily rows the sync holds — so it must be
+ * checked against `campaign-performance` runs even though it is filed under its
+ * own kind. Returning undefined means "not ads, nothing to check".
+ */
+export function adsRunKindFor(kind: ReportKind): AdsReportKind | undefined {
+  if (kind === 'campaign-performance-summary') return 'campaign-performance';
+  return isAdsReportKind(kind) ? kind : undefined;
+}
+
 export class AdsSyncStoreError extends Error {}
 
 export function adsRunId(params: {

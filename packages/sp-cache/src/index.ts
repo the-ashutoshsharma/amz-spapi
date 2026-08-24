@@ -54,9 +54,33 @@ export type {
 export {
   ingestReportBuffer,
   syncReport,
+  requestFbaReport,
+  collectFbaReport,
   isIngestError,
 } from './lib/report-sync.js';
-export type { IngestOutcome, IngestError } from './lib/report-sync.js';
+export type {
+  IngestOutcome,
+  IngestError,
+  FbaReportProgress,
+} from './lib/report-sync.js';
+
+export {
+  createReportJob,
+  getReportJob,
+  markJobBuilding,
+  completeReportJob,
+  failReportJob,
+  claimDelivery,
+  pendingJobsForChat,
+  undeliveredFinishedJobs,
+  newJobId,
+  reportJobStorage,
+} from './lib/report-jobs.js';
+export type {
+  ReportJob,
+  ReportJobKind,
+  ReportJobStatus,
+} from './lib/report-jobs.js';
 
 export {
   reconcileShipments,
@@ -183,6 +207,7 @@ export {
   adsSyncStorage,
   ingestedAdsWindows,
   overlapsIngestedWindow,
+  adsRunKindFor,
   isAdsReportKind,
   ADS_REPORT_KINDS,
   AdsSyncStoreError,

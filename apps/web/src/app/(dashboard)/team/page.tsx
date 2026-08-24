@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { canManageMembers } from '@farvisionllc/models';
+import { redirect } from 'next/navigation';
 import { auth0 } from '../../../lib/auth0';
+import { signedOutRedirect } from '../../../lib/signed-out';
 import Link from 'next/link';
 import {
   getWorkspace,
@@ -35,9 +37,17 @@ export const metadata: Metadata = { title: 'Team' };
  */
 export default async function TeamPage() {
   const session = await auth0.getSession();
-  // The layout already redirected an unauthenticated visitor; this is a type
-  // narrow, not a second gate.
-  if (!session?.user?.sub) return null;
+  /**
+   * A real gate, not a type narrow.
+   *
+   * The layout redirects an unauthenticated visitor, but only on a full load:
+   * client-side navigation reuses the layout that is already mounted and runs
+   * this page alone. So a session that expires while the app is open reached
+   * here with no user and rendered NOTHING — a blank page with the nav still
+   * around it, which reads as a broken feature rather than as being signed
+   * out.
+   */
+  if (!session?.user?.sub) redirect(signedOutRedirect('/team'));
 
   const memberships = await listMembershipsForUser(session.user.sub);
 

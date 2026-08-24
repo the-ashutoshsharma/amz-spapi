@@ -1,8 +1,35 @@
+import { cache } from 'react';
 import type { AmazonApiType } from '@farvisionllc/models';
 import {
   credentialService,
   type CredentialProfileView,
 } from '../services/credential-service';
+
+/**
+ * One listing per API type per request, however many callers ask.
+ *
+ * The mint next door in `amazon-clients` was memoized for exactly this reason
+ * and this was not, which left the asymmetry that `ads-ops.resolve()` runs on
+ * EVERY ads tool call — so a chat turn touching three ads tools made three
+ * round trips to list the same five profiles, at roughly 2.7s each.
+ *
+ * **`cache` from React, which is REQUEST-scoped — not a module-level map.** A
+ * module-level cache lives for the life of the server instance, and one Vercel
+ * instance serves many users, so it would hand one seller's connection list to
+ * the next request that asked for the same API type. Request scope cannot.
+ *
+ * Keyed on `apiType` alone, deliberately: React's `cache` compares arguments by
+ * identity, so memoizing on the filter OBJECT would miss on every call — each
+ * caller passes a fresh literal. Filtering and sorting stay outside, where they
+ * are pure and cost nothing.
+ *
+ * Outside a request scope this simply does not memoize, which is the behaviour
+ * before it existed — slower, never wrong.
+ */
+const listingForRequest = cache(async (apiType: AmazonApiType) => {
+  const credentials = await credentialService();
+  return credentials.list(apiType);
+});
 
 /**
  * Which Amazon connections the current user has (#55).
@@ -125,8 +152,7 @@ function sortConnections(
 export async function listAmazonConnections(
   options: ConnectionFilters
 ): Promise<AmazonConnection[]> {
-  const credentials = await credentialService();
-  const listing = await credentials.list(options.apiType);
+  const listing = await listingForRequest(options.apiType);
   const defaultProfileName = listing.defaults[options.apiType];
 
   const connections = listing.profiles
