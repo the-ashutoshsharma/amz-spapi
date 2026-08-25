@@ -183,17 +183,36 @@ Both CLIs follow Unix philosophy:
 - **staging** (preview stacks, Vercel preview)
 - **prod** (prod AWS + Vercel)
 
-Env vars sample (per app):
+Env vars (web app). `docs/deployment-environment.md` is the authority; this is
+the summary.
 
 ```
-AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET
-LWA_CLIENT_ID, LWA_CLIENT_SECRET, ADS_CLIENT_ID, ADS_CLIENT_SECRET
-COUCHBASE_CONNSTR, COUCHBASE_USERNAME, COUCHBASE_PASSWORD, COUCHBASE_BUCKET
-AWS_REGION, SES_INBOUND_RULESET
+AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_SECRET, AUTH0_AUDIENCE
+APP_BASE_URL          where Auth0 and Stripe send the browser back to
+CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, CB_BUCKET, CB_SCOPE
+AWS_REGION, AWS_ROLE_ARN                     STS via Vercel OIDC; no stored key
+SP_API_APPLICATION_ID                        the Amazon app id in the OAuth URL
+REPORT_JOBS_STATE_MACHINE_ARN                unset = reports refuse, not fall back
 AI_GATEWAY_API_KEY (all models route through the Vercel AI Gateway)
 APIFY_TOKEN, APIFY_SOURCE_ACTOR_ID, APIFY_ALIBABA_ACTOR_ID, APIFY_SOURCING_ACTOR_ID
 COST_CAP_DAILY_USD, COST_DEFAULT_CALL_USD, COST_UNIT_PRICE_<OPERATION>
 ```
+
+**NOT environment variables, though they were once listed here:**
+
+- `LWA_CLIENT_ID` / `LWA_CLIENT_SECRET` / `ADS_CLIENT_ID` / `ADS_CLIENT_SECRET`
+  live in the stage's `amazonOauth` **Secrets Manager** secret and are read at
+  runtime by the `credentials` Lambda alone (#55). They mint access tokens from
+  EVERY connected seller's refresh token, so a Vercel dashboard value — present
+  in every build, beside the tokens it unlocks — was the wrong home. The web app
+  never holds them; it calls `POST /credentials/{apiType}/{profileName}/access-token`.
+  A test asserts they never reach the CloudFormation template.
+- `COUCHBASE_CONNSTR` / `COUCHBASE_USERNAME` / `COUCHBASE_PASSWORD` /
+  `COUCHBASE_BUCKET` were never the real names. The code reads `CB_*`, and in
+  Lambdas nothing is an environment variable at all — host, bucket, scope and
+  login all live inside the secret named by `CB_CREDENTIALS_SECRET_ID`
+  (ADR-0010), so moving cluster is one secret write rather than a deploy.
+- `SES_INBOUND_RULESET` is unread. Email ingest is still roadmap (§2.4).
 
 ### Metered spend (cost ledger)
 
