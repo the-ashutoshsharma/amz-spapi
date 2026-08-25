@@ -345,7 +345,7 @@ describe('getMyFeesEstimateForSKU', () => {
     expect(result.currency).toBe('USD');
   });
 
-  it('falls back gracefully on error with estimated referral fee', async () => {
+  it('fails safely by throwing an error when fee estimation fails or returns an error', async () => {
     const client = makeClient();
     withTransport(client, {
       post: async () => {
@@ -353,15 +353,37 @@ describe('getMyFeesEstimateForSKU', () => {
       },
     });
 
-    const result = await client.getMyFeesEstimateForSKU({
-      sku: 'SKU-COFFEE-1',
-      price: 20.0,
-      currency: 'USD',
+    await expect(
+      client.getMyFeesEstimateForSKU({
+        sku: 'SKU-COFFEE-1',
+        price: 20.0,
+        currency: 'USD',
+      })
+    ).rejects.toThrow('500 internal error');
+  });
+
+  it('throws an error when FeesEstimateResult contains an Error status', async () => {
+    const client = makeClient();
+    withTransport(client, {
+      post: async () => ({
+        data: {
+          payload: {
+            FeesEstimateResult: {
+              Status: 'ClientError',
+              Error: { Code: 'InvalidInput', Message: 'SKU not found' },
+            },
+          },
+        },
+      }),
     });
 
-    expect(result.referralFee).toBe(3.0); // 15% of 20
-    expect(result.totalFees).toBe(3.0);
-    expect(result.fulfillmentFee).toBe(0);
+    await expect(
+      client.getMyFeesEstimateForSKU({
+        sku: 'UNKNOWN-SKU',
+        price: 20.0,
+        currency: 'USD',
+      })
+    ).rejects.toThrow(/Fee estimation failed for SKU UNKNOWN-SKU: SKU not found/);
   });
 });
 

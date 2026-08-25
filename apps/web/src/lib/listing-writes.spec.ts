@@ -247,9 +247,153 @@ describe('createListingWrites - pricing operations', () => {
       expect(result.verdict).toBe('PASS');
       expect(result.warnings.some((w) => w.includes('NOT ELIGIBLE'))).toBe(true);
     });
+
+    it('marks MISSING_COST_BASIS when landed cost currency differs from listing currency', async () => {
+      mockGetListingsItem.mockResolvedValueOnce({
+        summaries: [{ productType: 'COFFEE_MAKER' }],
+        attributes: {},
+        offers: [{ price: { amount: '25.00', currencyCode: 'USD' } }],
+        issues: [],
+      });
+
+      mockGetFeaturedOfferExpectedPrice.mockResolvedValueOnce({
+        status: 'VALID_FOEP',
+      });
+
+      mockGetMyFeesEstimateForSKU.mockResolvedValueOnce({
+        referralFee: 3.75,
+        fulfillmentFee: 3.25,
+        totalFees: 7.0,
+        currency: 'USD',
+      });
+
+      mockResolveLandedCost.mockResolvedValueOnce({
+        unitCost: 50.0,
+        currency: 'CNY', // Mismatched currency!
+        source: 'purchase_order',
+      });
+
+      const writes = createListingWrites(deps);
+      const result = await writes.checkPrice({
+        sku: 'SKU-COFFEE-1',
+        price: 24.0,
+      });
+
+      expect(result.verdict).toBe('MISSING_COST_BASIS');
+      expect(
+        result.warnings.some((w) =>
+          w.includes('does not match listing currency USD')
+        )
+      ).toBe(true);
+    });
+
+    it('fails safely by throwing when fee estimation fails', async () => {
+      mockGetListingsItem.mockResolvedValueOnce({
+        summaries: [{ productType: 'COFFEE_MAKER' }],
+        attributes: {},
+        offers: [{ price: { amount: '25.00', currencyCode: 'USD' } }],
+        issues: [],
+      });
+
+      mockGetFeaturedOfferExpectedPrice.mockResolvedValueOnce({
+        status: 'VALID_FOEP',
+      });
+
+      mockGetMyFeesEstimateForSKU.mockRejectedValueOnce(
+        new Error('Product Fees API 500 error')
+      );
+
+      mockResolveLandedCost.mockResolvedValueOnce({
+        unitCost: 8.0,
+        currency: 'USD',
+        source: 'product_cogs',
+      });
+
+      const writes = createListingWrites(deps);
+      await expect(
+        writes.checkPrice({
+          sku: 'SKU-COFFEE-1',
+          price: 24.0,
+        })
+      ).rejects.toThrow('Product Fees API 500 error');
+    });
   });
 
   describe('applyPriceUpdate', () => {
+    it('refuses price changes when landed cost is missing (MISSING_COST_BASIS)', async () => {
+      mockGetListingsItem.mockResolvedValue({
+        summaries: [{ productType: 'COFFEE_MAKER' }],
+        attributes: {},
+        offers: [{ price: { amount: '25.00', currencyCode: 'USD' } }],
+        issues: [],
+      });
+
+      mockGetFeaturedOfferExpectedPrice.mockResolvedValue({
+        status: 'VALID_FOEP',
+      });
+
+      mockGetMyFeesEstimateForSKU.mockResolvedValue({
+        referralFee: 3.75,
+        fulfillmentFee: 3.25,
+        totalFees: 7.0,
+        currency: 'USD',
+      });
+
+      mockResolveLandedCost.mockResolvedValue(null); // No landed cost
+
+      const writes = createListingWrites(deps);
+
+      await expect(
+        writes.applyPriceUpdate({
+          sku: 'SKU-COFFEE-1',
+          price: 24.0,
+        })
+      ).rejects.toThrow(
+        /Refusing price change for SKU SKU-COFFEE-1: no verified cost basis found/
+      );
+
+      expect(mockPatchListingsItem).not.toHaveBeenCalled();
+    });
+
+    it('refuses price changes when current listing price is unavailable (cannot bypass ±20% cap)', async () => {
+      mockGetListingsItem.mockResolvedValue({
+        summaries: [{ productType: 'COFFEE_MAKER' }],
+        attributes: {},
+        offers: [], // No current price
+        issues: [],
+      });
+
+      mockGetFeaturedOfferExpectedPrice.mockResolvedValue({
+        status: 'VALID_FOEP',
+      });
+
+      mockGetMyFeesEstimateForSKU.mockResolvedValue({
+        referralFee: 3.75,
+        fulfillmentFee: 3.25,
+        totalFees: 7.0,
+        currency: 'USD',
+      });
+
+      mockResolveLandedCost.mockResolvedValue({
+        unitCost: 8.0,
+        currency: 'USD',
+        source: 'product_cogs',
+      });
+
+      const writes = createListingWrites(deps);
+
+      await expect(
+        writes.applyPriceUpdate({
+          sku: 'SKU-COFFEE-1',
+          price: 24.0,
+        })
+      ).rejects.toThrow(
+        /current listing price could not be determined to verify the ±20% single-call safety threshold/
+      );
+
+      expect(mockPatchListingsItem).not.toHaveBeenCalled();
+    });
+
     it('refuses price changes that breach the margin floor with explicit error details', async () => {
       mockGetListingsItem.mockResolvedValue({
         summaries: [{ productType: 'COFFEE_MAKER' }],

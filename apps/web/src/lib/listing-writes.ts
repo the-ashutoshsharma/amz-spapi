@@ -468,6 +468,13 @@ export function createListingWrites(deps: ListingWritesDeps) {
         warnings.push(
           `No landed cost or COGS found for SKU ${params.sku}. Contribution margin cannot be guaranteed without a cost basis.`
         );
+      } else if (
+        landedCost.currency.toUpperCase() !== currency.toUpperCase()
+      ) {
+        verdict = 'MISSING_COST_BASIS';
+        warnings.push(
+          `Landed cost for SKU ${params.sku} is in ${landedCost.currency}, which does not match listing currency ${currency}. Contribution margin cannot be safely verified across currencies without an exchange rate.`
+        );
       } else if (!margin.floorSatisfied) {
         verdict = 'MARGIN_FLOOR_BREACH';
         warnings.push(
@@ -480,6 +487,12 @@ export function createListingWrites(deps: ListingWritesDeps) {
           )}, producing a negative contribution margin of ${currency} ${margin.contributionMargin.toFixed(
             2
           )} (${margin.contributionMarginPercent}%).`
+        );
+      }
+
+      if (current.amount === undefined) {
+        warnings.push(
+          `Could not determine current listing price for SKU ${params.sku}; price change percentage cannot be verified.`
         );
       }
 
@@ -614,6 +627,16 @@ export function createListingWrites(deps: ListingWritesDeps) {
         currency: params.currency,
       });
 
+      if (check.verdict === 'MISSING_COST_BASIS') {
+        throw new Error(
+          `Refusing price change for SKU ${
+            params.sku
+          }: no verified cost basis found (${
+            check.warnings[0] ?? 'missing or mismatched landed cost'
+          }). A price change cannot be approved without a reliable cost basis to guarantee the margin floor.`
+        );
+      }
+
       if (check.verdict === 'MARGIN_FLOOR_BREACH') {
         throw new Error(
           `Refusing price change for SKU ${
@@ -633,9 +656,15 @@ export function createListingWrites(deps: ListingWritesDeps) {
       // Guardrail on max percentage move (default ±20%)
       const maxChange = params.maxChangePercent ?? 20;
       if (
-        check.changePercent !== undefined &&
-        Math.abs(check.changePercent) > maxChange
+        check.currentPrice === undefined ||
+        check.changePercent === undefined
       ) {
+        throw new Error(
+          `Refusing price change for SKU ${params.sku}: current listing price could not be determined to verify the ±${maxChange}% single-call safety threshold.`
+        );
+      }
+
+      if (Math.abs(check.changePercent) > maxChange) {
         throw new Error(
           `Refusing price change for SKU ${params.sku}: price change of ${
             check.changePercent > 0 ? '+' : ''
@@ -643,7 +672,7 @@ export function createListingWrites(deps: ListingWritesDeps) {
             1
           )}% exceeds the ±${maxChange}% single-call safety threshold (from ${
             check.currency
-          } ${check.currentPrice?.toFixed(2)} to ${
+          } ${check.currentPrice.toFixed(2)} to ${
             check.currency
           } ${params.price.toFixed(2)}).`
         );

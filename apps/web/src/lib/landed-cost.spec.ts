@@ -303,4 +303,73 @@ describe('populateProductCogsFromPurchases', () => {
       })
     );
   });
+
+  it('populates Product sourcing cogs from PO when product COGS unitCost is 0 or negative', async () => {
+    mockFindListingBySku.mockResolvedValue({
+      listingId: 'l1',
+      productId: 'prod1',
+      external: { sku: 'SKU-COFFEE-1' },
+    } as ProductListing);
+
+    const productWithZeroCogs: Product = {
+      productId: 'prod1',
+      userId: 'user1',
+      title: 'French Press',
+      createdAt: 1000,
+      updatedAt: 1000,
+      status: 'active',
+      sourcing: {
+        cogs: {
+          unitCost: 0,
+          currency: 'USD',
+        },
+      },
+    };
+
+    mockGetProduct.mockResolvedValue(productWithZeroCogs);
+
+    mockListPurchaseOrders.mockResolvedValueOnce([
+      {
+        key: 'user1::PO-2026-0001',
+        userId: 'user1',
+        storedAt: 1000,
+        updatedAt: 1000,
+        renders: [],
+        order: {
+          poNumber: 'PO-2026-0001',
+          issueDate: '2026-01-01',
+          status: 'open',
+          vendorId: 'v1',
+          currency: 'USD',
+          revision: 1,
+          lines: [
+            {
+              sku: 'SKU-COFFEE-1',
+              description: 'Order',
+              quantity: 100,
+              unitPrice: 7.25,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await populateProductCogsFromPurchases({
+      userId: 'user1',
+      sku: 'SKU-COFFEE-1',
+    });
+
+    expect(result?.unitCost).toBe(7.25);
+    expect(mockUpsertProduct).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: 'prod1',
+        sourcing: {
+          cogs: {
+            unitCost: 7.25,
+            currency: 'USD',
+          },
+        },
+      })
+    );
+  });
 });

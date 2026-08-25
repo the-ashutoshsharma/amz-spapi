@@ -191,7 +191,10 @@ export async function populateProductCogsFromPurchases(params: {
   });
   if (!product) return null;
 
-  if (product.sourcing?.cogs?.unitCost !== undefined) {
+  if (
+    product.sourcing?.cogs?.unitCost !== undefined &&
+    product.sourcing.cogs.unitCost > 0
+  ) {
     return {
       unitCost: product.sourcing.cogs.unitCost,
       currency: product.sourcing.cogs.currency ?? 'USD',

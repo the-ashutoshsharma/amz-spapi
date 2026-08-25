@@ -276,10 +276,13 @@ export function approvalSummary(toolName: string, input: unknown): string {
 
   const sku = (input as { sku?: string } | null)?.sku;
   const price = (input as { price?: number } | null)?.price;
-  const currency = (input as { currency?: string } | null)?.currency ?? 'USD';
+  const currency = (input as { currency?: string } | null)?.currency;
 
   if (toolName === 'set-price' && sku && price !== undefined) {
-    return `${base} — SKU ${sku} to ${currency} ${price.toFixed(2)}`;
+    const formattedPrice = currency
+      ? `${currency} ${price.toFixed(2)}`
+      : price.toFixed(2);
+    return `${base} — SKU ${sku} to ${formattedPrice}`;
   }
 
   const imageCount = (input as { imageAssetIds?: string[] } | null)

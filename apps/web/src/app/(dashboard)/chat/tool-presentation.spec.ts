@@ -128,7 +128,7 @@ describe('approvalSummary', () => {
     expect(summary).toContain('(1 item)');
   });
 
-  it('formats set-price approval with SKU and formatted price', () => {
+  it('formats set-price approval with SKU and formatted price with currency', () => {
     const summary = approvalSummary('set-price', {
       sku: 'COFFEE-MUG-1',
       price: 24.99,
@@ -136,6 +136,16 @@ describe('approvalSummary', () => {
     });
     expect(summary).toBe(
       'Update the price of this LIVE Amazon listing (a snapshot is saved first) — SKU COFFEE-MUG-1 to USD 24.99'
+    );
+  });
+
+  it('formats set-price approval with SKU and price without guessing USD when currency is omitted', () => {
+    const summary = approvalSummary('set-price', {
+      sku: 'COFFEE-MUG-1',
+      price: 24.99,
+    });
+    expect(summary).toBe(
+      'Update the price of this LIVE Amazon listing (a snapshot is saved first) — SKU COFFEE-MUG-1 to 24.99'
     );
   });
 });

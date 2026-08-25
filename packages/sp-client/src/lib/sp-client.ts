@@ -644,81 +644,88 @@ export class SpApiClient {
   }> {
     const marketplaceId = params.marketplaceId || this.config.marketplaceId;
     const currency = params.currency || 'USD';
-    try {
-      const response = await this.httpClient.post<{
-        payload?: {
-          FeesEstimateResult?: {
-            Status?: string;
-            FeesEstimate?: {
-              TotalFeesEstimate?: { Amount?: number; CurrencyCode?: string };
-              FeeDetailList?: Array<{
-                FeeType?: string;
-                FeeAmount?: { Amount?: number };
-                FeePromotion?: { Amount?: number };
-                FinalFee?: { Amount?: number };
-              }>;
-            };
-            Error?: { Code?: string; Message?: string };
+    const response = await this.httpClient.post<{
+      payload?: {
+        FeesEstimateResult?: {
+          Status?: string;
+          FeesEstimate?: {
+            TotalFeesEstimate?: { Amount?: number; CurrencyCode?: string };
+            FeeDetailList?: Array<{
+              FeeType?: string;
+              FeeAmount?: { Amount?: number };
+              FeePromotion?: { Amount?: number };
+              FinalFee?: { Amount?: number };
+            }>;
           };
+          Error?: { Code?: string; Message?: string };
         };
-      }>(
-        `/products/fees/v0/listings/${encodeURIComponent(
-          params.sku
-        )}/feesEstimate`,
-        {
-          FeesEstimateRequest: {
-            MarketplaceId: marketplaceId,
-            IsAmazonFulfilled: params.isAmazonFulfilled ?? true,
-            PriceToEstimateFees: {
-              ListingPrice: {
-                CurrencyCode: currency,
-                Amount: params.price,
-              },
+      };
+    }>(
+      `/products/fees/v0/listings/${encodeURIComponent(
+        params.sku
+      )}/feesEstimate`,
+      {
+        FeesEstimateRequest: {
+          MarketplaceId: marketplaceId,
+          IsAmazonFulfilled: params.isAmazonFulfilled ?? true,
+          PriceToEstimateFees: {
+            ListingPrice: {
+              CurrencyCode: currency,
+              Amount: params.price,
             },
-            Identifier: params.sku,
           },
-        }
-      );
-
-      const result = response.data?.payload?.FeesEstimateResult;
-      const estimate = result?.FeesEstimate;
-      const totalFees = estimate?.TotalFeesEstimate?.Amount ?? 0;
-      const details = estimate?.FeeDetailList ?? [];
-
-      let referralFee = 0;
-      let fulfillmentFee = 0;
-      for (const fee of details) {
-        const amt = fee.FinalFee?.Amount ?? fee.FeeAmount?.Amount ?? 0;
-        const feeType = (fee.FeeType ?? '').toLowerCase();
-        if (feeType.includes('referral')) {
-          referralFee += amt;
-        } else if (feeType.includes('fulfillment') || feeType.includes('fba')) {
-          fulfillmentFee += amt;
-        }
+          Identifier: params.sku,
+        },
       }
+    );
 
-      return {
-        referralFee,
-        fulfillmentFee,
-        totalFees: totalFees || referralFee + fulfillmentFee,
-        currency: estimate?.TotalFeesEstimate?.CurrencyCode || currency,
-        feeDetailList: details.map((d) => ({
-          feeType: d.FeeType ?? 'unknown',
-          feeAmount: d.FeeAmount?.Amount ?? 0,
-          feePromotion: d.FeePromotion?.Amount,
-          finalFee: d.FinalFee?.Amount ?? d.FeeAmount?.Amount ?? 0,
-        })),
-      };
-    } catch {
-      // If fee estimation fails (e.g. unlisted SKU or network failure), estimate referral fee ~15% as fallback
-      const fallbackReferral = Math.round(params.price * 0.15 * 100) / 100;
-      return {
-        referralFee: fallbackReferral,
-        fulfillmentFee: 0,
-        totalFees: fallbackReferral,
-        currency,
-      };
+    const result = response.data?.payload?.FeesEstimateResult;
+    if (
+      result?.Status === 'ClientError' ||
+      result?.Status === 'ServerError' ||
+      result?.Error
+    ) {
+      throw new Error(
+        `Fee estimation failed for SKU ${params.sku}: ${
+          result.Error?.Message ?? result.Status ?? 'Unknown fee estimation error'
+        }`
+      );
     }
+
+    const estimate = result?.FeesEstimate;
+    const totalFees = estimate?.TotalFeesEstimate?.Amount;
+    if (totalFees === undefined) {
+      throw new Error(
+        `Fee estimation for SKU ${params.sku} did not return a valid TotalFeesEstimate.`
+      );
+    }
+
+    const details = estimate.FeeDetailList ?? [];
+
+    let referralFee = 0;
+    let fulfillmentFee = 0;
+    for (const fee of details) {
+      const amt = fee.FinalFee?.Amount ?? fee.FeeAmount?.Amount ?? 0;
+      const feeType = (fee.FeeType ?? '').toLowerCase();
+      if (feeType.includes('referral')) {
+        referralFee += amt;
+      } else if (feeType.includes('fulfillment') || feeType.includes('fba')) {
+        fulfillmentFee += amt;
+      }
+    }
+
+    return {
+      referralFee,
+      fulfillmentFee,
+      totalFees,
+      currency: estimate.TotalFeesEstimate?.CurrencyCode || currency,
+      feeDetailList: details.map((d) => ({
+        feeType: d.FeeType ?? 'unknown',
+        feeAmount: d.FeeAmount?.Amount ?? 0,
+        feePromotion: d.FeePromotion?.Amount,
+        finalFee: d.FinalFee?.Amount ?? d.FeeAmount?.Amount ?? 0,
+      })),
+    };
   }
 
   // ========================================
