@@ -617,6 +617,182 @@ export class SpApiClient {
   }
 
   // ========================================
+  // Product Fees API (v0)
+  // ========================================
+
+  /**
+   * Get estimated fees for a SKU at a given price point.
+   * POST /products/fees/v0/listings/{SellerSKU}/feesEstimate
+   */
+  async getMyFeesEstimateForSKU(params: {
+    sku: string;
+    price: number;
+    currency?: string;
+    marketplaceId?: string;
+    isAmazonFulfilled?: boolean;
+  }): Promise<{
+    referralFee: number;
+    fulfillmentFee: number;
+    totalFees: number;
+    currency: string;
+    feeDetailList?: Array<{
+      feeType: string;
+      feeAmount: number;
+      feePromotion?: number;
+      finalFee: number;
+    }>;
+  }> {
+    const marketplaceId = params.marketplaceId || this.config.marketplaceId;
+    const currency = params.currency || 'USD';
+    try {
+      const response = await this.httpClient.post<{
+        payload?: {
+          FeesEstimateResult?: {
+            Status?: string;
+            FeesEstimate?: {
+              TotalFeesEstimate?: { Amount?: number; CurrencyCode?: string };
+              FeeDetailList?: Array<{
+                FeeType?: string;
+                FeeAmount?: { Amount?: number };
+                FeePromotion?: { Amount?: number };
+                FinalFee?: { Amount?: number };
+              }>;
+            };
+            Error?: { Code?: string; Message?: string };
+          };
+        };
+      }>(
+        `/products/fees/v0/listings/${encodeURIComponent(
+          params.sku
+        )}/feesEstimate`,
+        {
+          FeesEstimateRequest: {
+            MarketplaceId: marketplaceId,
+            IsAmazonFulfilled: params.isAmazonFulfilled ?? true,
+            PriceToEstimateFees: {
+              ListingPrice: {
+                CurrencyCode: currency,
+                Amount: params.price,
+              },
+            },
+            Identifier: params.sku,
+          },
+        }
+      );
+
+      const result = response.data?.payload?.FeesEstimateResult;
+      const estimate = result?.FeesEstimate;
+      const totalFees = estimate?.TotalFeesEstimate?.Amount ?? 0;
+      const details = estimate?.FeeDetailList ?? [];
+
+      let referralFee = 0;
+      let fulfillmentFee = 0;
+      for (const fee of details) {
+        const amt = fee.FinalFee?.Amount ?? fee.FeeAmount?.Amount ?? 0;
+        const feeType = (fee.FeeType ?? '').toLowerCase();
+        if (feeType.includes('referral')) {
+          referralFee += amt;
+        } else if (feeType.includes('fulfillment') || feeType.includes('fba')) {
+          fulfillmentFee += amt;
+        }
+      }
+
+      return {
+        referralFee,
+        fulfillmentFee,
+        totalFees: totalFees || referralFee + fulfillmentFee,
+        currency: estimate?.TotalFeesEstimate?.CurrencyCode || currency,
+        feeDetailList: details.map((d) => ({
+          feeType: d.FeeType ?? 'unknown',
+          feeAmount: d.FeeAmount?.Amount ?? 0,
+          feePromotion: d.FeePromotion?.Amount,
+          finalFee: d.FinalFee?.Amount ?? d.FeeAmount?.Amount ?? 0,
+        })),
+      };
+    } catch {
+      // If fee estimation fails (e.g. unlisted SKU or network failure), estimate referral fee ~15% as fallback
+      const fallbackReferral = Math.round(params.price * 0.15 * 100) / 100;
+      return {
+        referralFee: fallbackReferral,
+        fulfillmentFee: 0,
+        totalFees: fallbackReferral,
+        currency,
+      };
+    }
+  }
+
+  // ========================================
+  // Product Pricing API (2022-05-01)
+  // ========================================
+
+  /**
+   * Get Featured Offer Expected Price (FOEP) for a SKU.
+   * POST /batches/products/pricing/2022-05-01/offer/featuredOfferExpectedPrice
+   */
+  async getFeaturedOfferExpectedPrice(params: {
+    sku: string;
+    marketplaceId?: string;
+  }): Promise<{
+    status: string;
+    expectedPrice?: number;
+    currency?: string;
+    competingPrice?: number;
+    competingOfferType?: string;
+    raw?: unknown;
+  }> {
+    const marketplaceId = params.marketplaceId || this.config.marketplaceId;
+    try {
+      const response = await this.httpClient.post<{
+        responses?: Array<{
+          status?: { statusCode?: number };
+          body?: {
+            featuredOfferExpectedPriceResult?: {
+              featuredOfferExpectedPrice?: {
+                listingPrice?: { amount?: number; currencyCode?: string };
+              };
+              resultStatus?: string;
+              competingFeaturedOffer?: {
+                listingPrice?: { amount?: number; currencyCode?: string };
+                offerType?: string;
+              };
+            };
+            errors?: Array<{ code?: string; message?: string }>;
+          };
+        }>;
+      }>('/batches/products/pricing/2022-05-01/offer/featuredOfferExpectedPrice', {
+        requests: [
+          {
+            uri: `/products/pricing/2022-05-01/offer/featuredOfferExpectedPrice?marketplaceId=${marketplaceId}&sku=${encodeURIComponent(
+              params.sku
+            )}`,
+            method: 'GET',
+          },
+        ],
+      });
+
+      const first = response.data?.responses?.[0];
+      const result = first?.body?.featuredOfferExpectedPriceResult;
+      const expected = result?.featuredOfferExpectedPrice?.listingPrice;
+      const competing = result?.competingFeaturedOffer;
+
+      return {
+        status:
+          result?.resultStatus ??
+          (first?.status?.statusCode === 200 ? 'VALID_FOEP' : 'UNKNOWN'),
+        expectedPrice: expected?.amount,
+        currency: expected?.currencyCode,
+        competingPrice: competing?.listingPrice?.amount,
+        competingOfferType: competing?.offerType,
+        raw: first?.body,
+      };
+    } catch {
+      return {
+        status: 'UNAVAILABLE',
+      };
+    }
+  }
+
+  // ========================================
   // Finances API (v0)
   // ========================================
 

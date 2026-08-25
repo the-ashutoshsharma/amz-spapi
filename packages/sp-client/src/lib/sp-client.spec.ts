@@ -301,3 +301,106 @@ describe('getOrders', () => {
     expect(params['MarketplaceIds']).toBe('ATVPDKIKX0DER');
   });
 });
+
+describe('getMyFeesEstimateForSKU', () => {
+  it('posts fee estimate request and parses referral and fulfillment fees', async () => {
+    const client = makeClient();
+    const calls = withTransport(client, {
+      post: async () => ({
+        data: {
+          payload: {
+            FeesEstimateResult: {
+              Status: 'Success',
+              FeesEstimate: {
+                TotalFeesEstimate: { Amount: 8.25, CurrencyCode: 'USD' },
+                FeeDetailList: [
+                  {
+                    FeeType: 'ReferralFee',
+                    FinalFee: { Amount: 4.5 },
+                  },
+                  {
+                    FeeType: 'FBAFulfillmentFee',
+                    FinalFee: { Amount: 3.75 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    const result = await client.getMyFeesEstimateForSKU({
+      sku: 'SKU-COFFEE-1',
+      price: 30.0,
+      currency: 'USD',
+    });
+
+    expect(calls[0].path).toBe(
+      '/products/fees/v0/listings/SKU-COFFEE-1/feesEstimate'
+    );
+    expect(result.referralFee).toBe(4.5);
+    expect(result.fulfillmentFee).toBe(3.75);
+    expect(result.totalFees).toBe(8.25);
+    expect(result.currency).toBe('USD');
+  });
+
+  it('falls back gracefully on error with estimated referral fee', async () => {
+    const client = makeClient();
+    withTransport(client, {
+      post: async () => {
+        throw new Error('500 internal error');
+      },
+    });
+
+    const result = await client.getMyFeesEstimateForSKU({
+      sku: 'SKU-COFFEE-1',
+      price: 20.0,
+      currency: 'USD',
+    });
+
+    expect(result.referralFee).toBe(3.0); // 15% of 20
+    expect(result.totalFees).toBe(3.0);
+    expect(result.fulfillmentFee).toBe(0);
+  });
+});
+
+describe('getFeaturedOfferExpectedPrice', () => {
+  it('posts batch request and parses FOEP and competing offer', async () => {
+    const client = makeClient();
+    const calls = withTransport(client, {
+      post: async () => ({
+        data: {
+          responses: [
+            {
+              status: { statusCode: 200 },
+              body: {
+                featuredOfferExpectedPriceResult: {
+                  resultStatus: 'VALID_FOEP',
+                  featuredOfferExpectedPrice: {
+                    listingPrice: { amount: 28.5, currencyCode: 'USD' },
+                  },
+                  competingFeaturedOffer: {
+                    listingPrice: { amount: 28.99, currencyCode: 'USD' },
+                    offerType: 'B2C',
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    });
+
+    const result = await client.getFeaturedOfferExpectedPrice({
+      sku: 'SKU-COFFEE-1',
+    });
+
+    expect(calls[0].path).toBe(
+      '/batches/products/pricing/2022-05-01/offer/featuredOfferExpectedPrice'
+    );
+    expect(result.status).toBe('VALID_FOEP');
+    expect(result.expectedPrice).toBe(28.5);
+    expect(result.competingPrice).toBe(28.99);
+  });
+});

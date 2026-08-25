@@ -969,6 +969,26 @@ export interface SellerListingWrites {
     snapshotId?: string;
   }): Promise<Record<string, unknown>>;
   checkListing(params: { sku: string }): Promise<Record<string, unknown>>;
+  checkPrice(params: {
+    sku: string;
+    price?: number;
+    currency?: string;
+  }): Promise<Record<string, unknown>>;
+  previewPriceUpdate?(params: {
+    sku: string;
+    price: number;
+    currency?: string;
+  }): Promise<Record<string, unknown>>;
+  applyPriceUpdate(params: {
+    sku: string;
+    price: number;
+    currency?: string;
+    maxChangePercent?: number;
+  }): Promise<Record<string, unknown>>;
+  revertPrice?(params: {
+    sku: string;
+    snapshotId?: string;
+  }): Promise<Record<string, unknown>>;
 }
 
 /** A page the host read on the agent's behalf. */
@@ -1718,6 +1738,78 @@ function getListingWriteTools(listingWrites: SellerListingWrites) {
         } catch (error) {
           return {
             error: error instanceof Error ? error.message : 'Check failed.',
+          };
+        }
+      },
+    },
+
+    'price-check': {
+      description:
+        'Analyze a current or proposed price for a SKU: evaluates against current price, ' +
+        'Featured Offer Expected Price (FOEP), estimated Amazon fees (referral + FBA), ' +
+        'per-SKU landed cost, contribution margin $, and contribution margin %. ' +
+        'Evaluates margin-floor compliance and returns Buy Box competitiveness verdict. ' +
+        'ALWAYS call this and present the breakdown before proposing set-price.',
+      inputSchema: z.object({
+        sku: z.string().min(1).describe('The seller SKU to check'),
+        price: z
+          .number()
+          .positive()
+          .optional()
+          .describe(
+            'Proposed price to evaluate. Omit to evaluate the current live price.'
+          ),
+        currency: z
+          .string()
+          .optional()
+          .describe('ISO currency code (e.g. USD)'),
+      }),
+      execute: async (input: {
+        sku: string;
+        price?: number;
+        currency?: string;
+      }) => {
+        try {
+          return await listingWrites.checkPrice(input);
+        } catch (error) {
+          return {
+            error:
+              error instanceof Error ? error.message : 'Price check failed.',
+          };
+        }
+      },
+    },
+
+    'set-price': {
+      description:
+        'WRITE a new price for a SKU to the LIVE Amazon listing. The price change is validated ' +
+        'against the margin floor (refuses changes that breach the floor). The current listing ' +
+        'attributes are snapshotted first for undo/audit. Requires explicit user approval — ' +
+        'only call with a specific price that the user has seen and requested or approved. ' +
+        'NEVER call without prior user confirmation.',
+      inputSchema: z.object({
+        sku: z.string().min(1).describe('The seller SKU to update'),
+        price: z
+          .number()
+          .positive()
+          .describe('New price in the listing currency'),
+        currency: z
+          .string()
+          .optional()
+          .describe('ISO currency code (e.g. USD)'),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        sku: string;
+        price: number;
+        currency?: string;
+      }) => {
+        try {
+          return await listingWrites.applyPriceUpdate(input);
+        } catch (error) {
+          return {
+            error:
+              error instanceof Error ? error.message : 'Price update failed.',
           };
         }
       },
@@ -5661,6 +5753,7 @@ PHOTO WORKFLOW (attachments, labels, proposals):
 - preview-listing-images / apply-listing-images / revert-listing-images /
   check-listing-status: update the LIVE listing's images (ordered list — first
   image becomes MAIN).
+- price-check / set-price: evaluate and change price on the LIVE Amazon listing.
 
 LISTING WRITE SAFETY (non-negotiable):
 0. Run check-image-compliance on EVERY image first — role "main" for the image going
@@ -5671,7 +5764,7 @@ LISTING WRITE SAFETY (non-negotiable):
 1. NEVER call apply-listing-images without running preview-listing-images in the
    SAME conversation first and showing the user the per-slot diff and any
    validation issues.
-2. apply-listing-images and revert-listing-images pause for the user's explicit
+2. apply-listing-images, revert-listing-images, and set-price pause for the user's explicit
    approval — never present them as already done; wait for the result.
 3. The MAIN image must be a real photograph of the product on pure white — a
    background-removed cutout of the user's own photo. NEVER a composite scene,
@@ -5679,7 +5772,21 @@ LISTING WRITE SAFETY (non-negotiable):
 4. Every apply snapshots the listing first — after applying, mention the
    snapshotId and that revert-listing-images undoes it, then run
    check-listing-status and surface any issues.
-5. Changes propagate on Amazon in minutes to hours; set that expectation.`
+5. Changes propagate on Amazon in minutes to hours; set that expectation.
+
+PRICING SAFETY (non-negotiable):
+1. NEVER call set-price without running price-check first and presenting the full breakdown
+   to the seller: current price, proposed price, FOEP status & expected price, estimated
+   fees breakdown (referral + FBA), per-SKU landed cost with source, contribution margin $,
+   and contribution margin %.
+2. A price change must ALWAYS be based on a specific price that the seller has seen and
+   explicitly approved. Never implement standing or automatic repricing.
+3. The price change respects a margin floor based on per-SKU landed cost: prices that
+   breach the margin floor will be refused by the system.
+4. If Amazon reports FOEP as OFFER_NOT_ELIGIBLE, warn the seller that their offer is
+   currently ineligible for the Buy Box before requesting approval.
+5. After set-price completes, report the previous price, new price, margin contribution,
+   and snapshotId.`
     : '';
 
   const imageEditInstructions = imageOps

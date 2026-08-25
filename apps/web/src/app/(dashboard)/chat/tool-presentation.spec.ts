@@ -127,6 +127,17 @@ describe('approvalSummary', () => {
     });
     expect(summary).toContain('(1 item)');
   });
+
+  it('formats set-price approval with SKU and formatted price', () => {
+    const summary = approvalSummary('set-price', {
+      sku: 'COFFEE-MUG-1',
+      price: 24.99,
+      currency: 'USD',
+    });
+    expect(summary).toBe(
+      'Update the price of this LIVE Amazon listing (a snapshot is saved first) — SKU COFFEE-MUG-1 to USD 24.99'
+    );
+  });
 });
 
 /**

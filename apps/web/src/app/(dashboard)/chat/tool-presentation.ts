@@ -63,6 +63,8 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Checking listing health...',
     'Listing status retrieved',
   ],
+  'price-check': ['Checking price and margins...', 'Price check complete'],
+  'set-price': ['Updating listing price...', 'Listing price updated'],
   'save-vendor': ['Saving vendor...', 'Vendor saved'],
   'set-buyer-profile': ['Saving buyer profile...', 'Buyer profile saved'],
   'get-fc-address': ['Looking up Amazon FC...', 'FC lookup complete'],
@@ -190,6 +192,8 @@ const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
     'Write these images to the LIVE Amazon listing (a snapshot is saved first)',
   'revert-listing-images':
     'Restore this listing’s images from the stored snapshot',
+  'set-price':
+    'Update the price of this LIVE Amazon listing (a snapshot is saved first)',
   'create-purchase-order':
     'Create this purchase order (a PO number is assigned and it becomes a business record)',
   'revise-purchase-order':
@@ -271,6 +275,13 @@ export function approvalSummary(toolName: string, input: unknown): string {
   }
 
   const sku = (input as { sku?: string } | null)?.sku;
+  const price = (input as { price?: number } | null)?.price;
+  const currency = (input as { currency?: string } | null)?.currency ?? 'USD';
+
+  if (toolName === 'set-price' && sku && price !== undefined) {
+    return `${base} — SKU ${sku} to ${currency} ${price.toFixed(2)}`;
+  }
+
   const imageCount = (input as { imageAssetIds?: string[] } | null)
     ?.imageAssetIds?.length;
   const itemCount = adsBatchCount(input);
